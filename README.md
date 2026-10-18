@@ -1,6 +1,6 @@
 # What Should an LLM Know?
 
-Reproduction code for *What Should an LLM Know? Knowledge-Guided Warm Starts for Software Optimization* by Srinath Srinivasan and Tim Menzies.
+Reproduction code for *What Should an LLM Know? Knowledge-Guided Warm Starts for Software Optimization* 
 
 Includes the 49 benchmark datasets and eight expert-study datasets. Three datasets are shared, so there are **54 unique CSV files**. Every method uses the same included version of its dataset. Dataset paths and hashes are in `manifest.json`.
 
@@ -43,9 +43,7 @@ The default is 20 repeats. Successful trials are skipped on continuation. `--ret
 
 ## Expert replication
 
-**Our expert rules, feedback, and study records are excluded under IRB restrictions.** Researchers must recruit their own experts, obtain the required approvals, and supply their own reviewed rules to run H-DKP.
-
-Keep those inputs outside this repository. An external JSON file maps dataset IDs to one or two rule files per selected dataset. For example:
+An external JSON file maps dataset IDs to one or two rule files per selected dataset. For example:
 
 ```json
 {"auto93": [{"expert_id": "reviewer1", "path": "/private/rules/auto93.md"}]}
@@ -57,8 +55,6 @@ Run H-DKP on the selected datasets using that file:
 python rerun.py --cohort expert --datasets auto93 --methods H-DKP \
   --expert-rules /private/expert-rules.json --output results/fresh --execute --allow-paid
 ```
-
-For a complete RQ3 analysis, collect H-DKP results for all eight datasets and comparison-method results on the same datasets. The analysis derives expert tracks from the new trial records.
 
 ## RQ analyses
 
@@ -76,6 +72,4 @@ python rq4.py --trials results/fresh/trials.jsonl --output tables/rq4
 - **RQ3, Tables 1 and 7:** expert-cohort description and comparisons using independently collected expert trials.
 - **RQ4, Tables 2 and 8:** AMP stage definitions and measured calls, tokens, API charges, wall time, and labeling cost.
 
-RQ1–3 require complete trial coverage and report missing results rather than filling them in. RQ4 reports available cost measurements. Archived runs are excluded; reproducing numerical results requires fresh trials. API generations and charges can vary.
-
-Run the offline tests with `python -m unittest discover -s tests -v`. Upstream license notices are retained in `licenses/`.
+Run tests with `python -m unittest discover -s tests -v`.
