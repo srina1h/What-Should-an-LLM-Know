@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.env.*
+results/
+tables/
+.cache/
+.litellm_cache/
+*.safetensors
+*.bin
+.DS_Store
+
+expert_inputs/
+expert-rules*.json
