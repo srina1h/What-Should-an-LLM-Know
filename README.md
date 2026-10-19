@@ -72,4 +72,19 @@ python rq4.py --trials results/fresh/trials.jsonl --output tables/rq4
 - **RQ3, Tables 1 and 7:** expert-cohort description and comparisons using independently collected expert trials.
 - **RQ4, Tables 2 and 8:** AMP stage definitions and measured calls, tokens, API charges, wall time, and labeling cost.
 
+<<<<<<< Updated upstream
 Run tests with `python -m unittest discover -s tests -v`.
+=======
+RQ1–3 require complete trial coverage and report missing results rather than filling them in. RQ4 reports available cost measurements. Archived runs are excluded; reproducing numerical results requires fresh trials. API generations and charges can vary.
+
+Run the offline tests with `python -m unittest discover -s tests -v`. Upstream license notices are retained in `licenses/`.
+
+## SynthCore implementation
+
+SynthCore uses the authors' pinned `clusters` Diversity ensemble (commit
+`eaec7012a1928c36e73ffcf7ec894c5e3e28bfe3`), with the study's OpenRouter
+GPT-OSS-120B adapter. Each repeat uses 15 generation calls and selects the
+first configuration in the returned d2h-ranked pool, without downstream SMO.
+Both metrics score that same configuration. Nominal labeling demand is
+16 initial representatives plus 60 candidate mappings (76 accesses for four
+candidates per session); actual distinct labels are recorded separately.

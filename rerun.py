@@ -104,7 +104,7 @@ def make_jobs(manifest, cohort, methods, datasets=None):
 
 def call_limit(job, repair=False):
     method = job['method']
-    n = {'Random': 0, 'EZR': 0, 'RRP': 0, 'BS-LLM': 1, 'SynthCore': 1,
+    n = {'Random': 0, 'EZR': 0, 'RRP': 0, 'BS-LLM': 1, 'SynthCore': 15,
          'AMP-2': 2, 'AMP-3': 3, 'AMP-4': 7, 'H-DKP': 1,
          'HKMA-scout': 2, 'HKMA-rag': 1, 'HKMA-combined': 2}.get(method)
     if method == 'DAPR':
@@ -159,23 +159,30 @@ def run_trial(job, directory, seed, model, repair=False):
         row = rows[0]
         result = dict(selected_row=list(row), labeling_cost=evaluations,
                       labeling_count_basis='branch returned evaluation counter')
-    elif method in ('BS-LLM', 'SynthCore', 'AMP-4'):
+    elif method == 'SynthCore':
+        from src.models.synthcore import run_ensemble, SOURCE
+        _, audit, rows = run_ensemble(data, model, SOURCE, seed)
+        row = rows[0]
+        result = dict(selected_row=list(row),
+                      labeling_cost=audit['objective_access']['unique_scored_rows'],
+                      labeling_count_basis='distinct full observed-row tuples scored during the ensemble',
+                      nominal_labeling_budget=76, generation_sessions=len(audit['sessions']),
+                      selection_metric='d2h', downstream_smo=False,
+                      objective_access=audit['objective_access'])
+        (directory/'synthcore_audit.json').write_text(json.dumps(audit, indent=2)+'\n')
+    elif method in ('BS-LLM', 'AMP-4'):
         from src.models.warm_start import warm_smo
         args = SimpleNamespace(llm=run.MODEL, pipeline=model, dataset=str(path),
                                temperature=.7, max_tokens=4000, top_p=1., cache=False,
                                label=4, last=20, amp_mode='AMP-4', _gen_log_synth={})
-        if method == 'SynthCore':
-            from src.models.cluster import density
-            rows = density(args, method='LLM')
-        else:
-            rows, _ = warm_smo(args, score=lambda b, r, i, n: b-r,
-                               method='LLM' if method == 'BS-LLM' else 'AMP')
+        rows, _ = warm_smo(args, score=lambda b, r, i, n: b-r,
+                           method='LLM' if method == 'BS-LLM' else 'AMP')
         row = rows[0]
         sink = args._gen_log_synth
         mapped = len(sink.get('synth_rows') or []) - sink.get('synth_rows_dropped', 0)
         result = dict(selected_row=list(row), labeling_cost=len(rows)+mapped,
                       generated_candidates_dropped=sink.get('synth_rows_dropped', 0),
-                      nominal_labeling_budget=30 if method == 'SynthCore' else 20)
+                      nominal_labeling_budget=20)
     else:
         pilot = strategy = None
         if method == 'DAPR':
@@ -277,7 +284,7 @@ def execute(jobs, args, manifest):
             directory.mkdir(parents=True)
             seed = args.seed + rep + int(hashlib.md5(Path(job['input']['path']).name.encode()).hexdigest()[:8],16)%1000000 + attempt*1000003
             # Saved modern DAPR/AMP/HKMA plans request low reasoning; H-DKP and old arms do not.
-            effort = 'low' if job['method'] in ('DAPR','AMP-2','AMP-3') or job['method'].startswith('HKMA-') else None
+            effort = 'low' if job['method'] in ('DAPR','AMP-2','AMP-3','SynthCore') or job['method'].startswith('HKMA-') else None
             model = LoggedModel(directory, seed, call_limit(job, args.repair_invalid), reasoning_effort=effort)
             base.update(seed=seed, attempt=attempt, repair_invalid=args.repair_invalid,
                         reasoning_effort=effort)

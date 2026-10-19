@@ -104,9 +104,13 @@ class RunnerTests(unittest.TestCase):
 
     def test_synthcore_retains_its_own_schedule(self):
         result,n=self.trial('SynthCore')
-        self.assertEqual(result['nominal_labeling_budget'],30)
-        self.assertEqual(result['labeling_cost'],34)
-        self.assertEqual(n,1)
+        self.assertEqual(result['nominal_labeling_budget'],76)
+        self.assertTrue(16 <= result['labeling_cost'] <= 76)
+        self.assertEqual(result['generation_sessions'],15)
+        self.assertEqual(result['selection_metric'],'d2h')
+        self.assertFalse(result['downstream_smo'])
+        self.assertEqual(rerun.call_limit({'method':'SynthCore'}),15)
+        self.assertEqual(n,15)
 
     def test_scouting_is_charged_inside_hkma_budget(self):
         result,n=self.trial('HKMA-scout')
