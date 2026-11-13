@@ -23,6 +23,9 @@ class PublicInputsTests(unittest.TestCase):
         self.assertFalse((rerun.ROOT/'knowledge/expert').exists())
         self.assertFalse((rerun.ROOT/'API_COST_PROVENANCE.md').exists())
 
+    def test_all_bundled_hashes_match_fresh_checkout(self):
+        self.assertEqual(rerun.validate_inputs(rerun.load_manifest()),54)
+
     def test_hdkp_requires_replicators_rules(self):
         manifest={'expert':[dict(id='task')]}
         with self.assertRaisesRegex(ValueError,'your own rules'):
@@ -49,7 +52,7 @@ class PublicInputsTests(unittest.TestCase):
     def test_cost_analysis_allows_expert_comparator_runs_without_hdkp(self):
         manifest={'expert':[dict(id='task')]}
         analysis.attach_expert_tracks(manifest,[],require_hdkp=False)
-        self.assertEqual(len(analysis.expected_groups(manifest,'expert')),12)
+        self.assertEqual(len(analysis.expected_groups(manifest,'expert')),10)
 
 if __name__=='__main__':
     unittest.main()

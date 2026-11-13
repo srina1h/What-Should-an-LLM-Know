@@ -45,8 +45,8 @@ def validate_rows(data, rows):
 def optimize(data, generate, budget, seed, policy, scout=None):
     """Observed-row accounting; d2h search and Chebyshev primary reporting.
 
-    Preserve the historical top-two/bottom-two warm handoff. The equal-oracle
-    policy charges discarded evaluated rows too; legacy policy exposes them.
+    The current equal-oracle protocol retains every observed row for SMO.
+    The legacy policy preserves the historical top-two/bottom-two handoff.
     generate=None supplies the local exploit comparator under the same budget.
     """
     from src.utils.ezr import clone, d2h, chebyshev, dists, loglikes, the
@@ -80,12 +80,18 @@ def optimize(data, generate, budget, seed, policy, scout=None):
         rows = validate_rows(data, synth)
         neighbors = []
         for row in rows:
-            random.shuffle(todo)
-            nearest, *todo = sorted(todo, key=lambda ix: dists(data, row, data.rows[ix]))
+            # Current-paper proposals map to the full observed table; repeated
+            # matches are still evaluation requests but are not new labels.
+            candidates = list(range(len(data.rows))) if policy == "equal-oracle" else todo
+            random.shuffle(candidates)
+            nearest = min(candidates, key=lambda ix: dists(data, row, data.rows[ix]))
             neighbors.append(nearest)
             evaluated.append(nearest)
-        combined = rank(done + neighbors)
-        done = [combined[0], combined[1], combined[-1], combined[-2]]
+            if policy != "equal-oracle":
+                todo.remove(nearest)
+        todo = [ix for ix in todo if ix not in set(neighbors)]
+        combined = rank(list(dict.fromkeys(done + neighbors)))
+        done = combined if policy == "equal-oracle" else [combined[0], combined[1], combined[-1], combined[-2]]
     handoff = list(done)
     iterations = budget - (len(evaluated) if policy == "equal-oracle" else 4)
     for _ in range(iterations):

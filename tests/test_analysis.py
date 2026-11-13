@@ -18,7 +18,7 @@ def dataset(ident='task', tracks=1, features=4):
 def record(dataset='task', method='Random', rep=0, cohort='automated', expert_id='', score=.2,
            status='success', api_cost=.01):
     return dict(dataset=dataset, method=method, rep=rep, cohort=cohort, expert_id=expert_id,
-                status=status, feature_count=4, d2h=score, chebyshev=score, labeling_cost=24,
+                protocol_version=a.PROTOCOL_VERSION, status=status, feature_count=4, d2h=score, chebyshev=score, labeling_cost=24,
                 llm_calls=1, input_tokens=10, output_tokens=5, total_tokens=15,
                 api_cost_usd=api_cost, wall_seconds=2.)
 
@@ -51,7 +51,7 @@ class CoverageTests(unittest.TestCase):
     def test_complete_cohort(self):
         groups, coverage = a.validate_trials(self.records, self.manifest, 'automated', 2)
         a.require_complete(coverage)
-        self.assertEqual(len(groups), 12)
+        self.assertEqual(len(groups), 10)
 
     def test_missing_success_rejected_and_failure_reported(self):
         self.records[0]['status'] = 'failed'
@@ -103,7 +103,7 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(row['labeling_cost_missing_successes'], 2)
 
     def test_nonfinite_score_rejected(self):
-        self.records[0]['d2h'] = float('nan')
+        self.records[0]['chebyshev'] = float('nan')
         with self.assertRaises(a.AnalysisError):
             a.validate_trials(self.records, self.manifest, 'automated', 2)
 
@@ -113,19 +113,19 @@ class AggregationTests(unittest.TestCase):
         groups = {('a', 'Random', ''): [record(dataset='a', rep=i, score=0) for i in range(2)],
                   ('b', 'Random', ''): [record(dataset='b', rep=i, score=1) for i in range(8)]}
         summary = a.equal_dataset_means(groups, ['a', 'b'], methods=('Random',))
-        self.assertEqual([r['equal_dataset_mean'] for r in summary], [.5, .5])
+        self.assertEqual([r['equal_dataset_mean'] for r in summary], [.5])
 
     def test_expert_pool_switches_only_dual_track_task(self):
         manifest = dict(expert=[dataset('single'), dataset('dual', tracks=2)])
         rows = trials(manifest, 'expert', repeats=20)
         for r in rows:
             if r['method'] == 'H-DKP':
-                r['d2h'] = 0 if r['expert_id'] == 'expert_01' else 1
+                r['chebyshev'] = 0 if r['expert_id'] == 'expert_01' else 1
         groups, coverage = a.validate_trials(rows, manifest, 'expert', 20)
         a.require_complete(coverage)
-        pools = {n: a.memberships(groups, manifest['expert'], f'expert_{n}', metrics=('d2h',)) for n in (1, 2)}
+        pools = {n: a.memberships(groups, manifest['expert'], f'expert_{n}', metrics=('chebyshev',)) for n in (1, 2)}
         for n, result in pools.items():
-            self.assertEqual(len(result), 26)
+            self.assertEqual(len(result), 22)
             self.assertEqual(len({r['dataset'] for r in result}), 2)
         rank = lambda n, ds: next(r['scott_knott_rank'] for r in pools[n] if r['method'] == 'H-DKP' and r['dataset'] == ds)
         self.assertEqual(rank(1, 'single'), rank(2, 'single'))

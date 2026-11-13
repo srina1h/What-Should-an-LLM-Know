@@ -15,6 +15,7 @@ def warm_start_messages(data, best_rows, rest_rows, context=None):
             f"WORST examples (these have poor performance):\n{describe(rest_rows)}\n")
     symbolic = [f"{col.txt}: {', '.join(map(str, sorted(col.has, key=str)))}"
                 for col in data.cols.x if not hasattr(col, "lo")]
+    user += '\nTask metadata:\n' + task_metadata(data) + '\n'
     if symbolic:
         user += ("\nFor categorical features, use only these observed values exactly:\n"
                  + "\n".join(symbolic) + "\n")
@@ -29,3 +30,11 @@ def warm_start_messages(data, best_rows, rest_rows, context=None):
              "- feature1=value1, feature2=value2, ...")
     return [{"role": "system", "content": "You are a helpful AI that generates synthetic data examples for optimization."},
             {"role": "user", "content": user}]
+
+
+def task_metadata(data):
+    features = [f"- {c.txt}: {c.lo} to {c.hi}" if hasattr(c, 'lo')
+                else f"- {c.txt}: categorical {sorted(c.has, key=str)}" for c in data.cols.x]
+    objectives = [f"- {c.txt} ({'Maximize' if c.maximize else 'Minimize'}): {c.lo} to {c.hi}"
+                  for c in data.cols.y]
+    return '\n'.join(features + ['Objectives (do not generate these values):'] + objectives)

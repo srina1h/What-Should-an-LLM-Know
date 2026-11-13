@@ -25,8 +25,10 @@ class FakeModel:
 
     def invoke(self,messages):
         self.calls+=1
-        if self.method in ('BS-LLM','SynthCore'):
+        if self.method in ('SynthCore','SynthCore-28'):
             content='|A|B|C|D|Class|\n|---|---|---|---|---|\n|1|2|3|4|Best|\n|2|3|4|5|Best|\n|7|8|9|1|Rest|\n|8|9|1|2|Rest|'
+        elif self.method=='BS-LLM':
+            content='BETTER:\n- A=1, B=2, C=3, D=4\n- A=2, B=3, C=4, D=5\nWORSE:\n- A=7, B=8, C=9, D=1\n- A=8, B=9, C=1, D=2'
         elif self.method=='DAPR':
             text=str(messages)
             if 'reduced feature subspace' in text:
@@ -73,28 +75,44 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(0<=result['chebyshev']<=1)
         return result,model.calls
 
-    def test_modern_amp_and_expert_cost_twenty_labels(self):
-        for method,calls in [('AMP-2',2),('AMP-3',3),('H-DKP',1)]:
+    def test_single_session_methods_follow_24_request_budget(self):
+        for method,calls in [('BS-LLM',1),('AMP-2',2),('AMP-3',3),('AMP-4',7),('H-DKP',1)]:
             with self.subTest(method=method):
                 result,n=self.trial(method)
-                self.assertEqual(result['labeling_cost'],20)
+                self.assertEqual(result['oracle_evaluations'],24)
+                self.assertLessEqual(result['labeling_cost'],24)
                 self.assertEqual(n,calls)
 
-    def test_legacy_warm_start_counts_extra_mapped_rows(self):
-        for method,calls in [('BS-LLM',1),('AMP-4',7)]:
-            with self.subTest(method=method):
-                result,n=self.trial(method)
-                self.assertEqual(result['labeling_cost'],24)
-                self.assertEqual(n,calls)
-
-    def test_legacy_positional_rejection_is_preserved(self):
+    def test_interleaved_objective_columns_preserve_four_candidates(self):
         text=self.data.read_text().splitlines()
         rows=[line.split(',') for line in text[1:]]
         self.data.write_text('Score-,A,B,C,D\n'+''.join(','.join([row[-1]]+row[:-1])+'\n' for row in rows))
-        result,n=self.trial('AMP-4')
-        self.assertEqual(result['generated_candidates_dropped'],4)
-        self.assertEqual(result['labeling_cost'],20)
-        self.assertEqual(n,7)
+        for method in ('BS-LLM', 'AMP-4'):
+            result,n=self.trial(method)
+            self.assertEqual(result['oracle_evaluations'],24)
+            self.assertEqual(len(result['synth_rows']),4)
+            self.assertEqual(result['smo_evaluations'],16)
+
+    def test_random_samples_24_rows_without_replacement(self):
+        result,n=self.trial('Random')
+        self.assertEqual(result['oracle_evaluations'],24)
+        self.assertEqual(len(set(result['evaluated_row_indices'])),24)
+        self.assertEqual(n,0)
+
+    def test_ezr_uses_four_seeds_plus_twenty_search_steps(self):
+        result,n=self.trial('EZR')
+        self.assertEqual(result['oracle_evaluations'],24)
+        self.assertEqual(result['smo_evaluations'],20)
+        self.assertEqual(n,0)
+
+    def test_three_session_synthcore_is_available(self):
+        result,n=self.trial('SynthCore-28')
+        self.assertEqual(result['nominal_labeling_budget'],28)
+        self.assertEqual(result['generation_sessions'],3)
+        self.assertEqual(result['selection_metric'],'d2h')
+        self.assertFalse(result['downstream_smo'])
+        self.assertEqual(rerun.call_limit({'method':'SynthCore-28'}),3)
+        self.assertEqual(n,3)
 
     def test_dapr_intermediate_evaluations_are_additional(self):
         result,n=self.trial('DAPR')
@@ -115,7 +133,10 @@ class RunnerTests(unittest.TestCase):
     def test_scouting_is_charged_inside_hkma_budget(self):
         result,n=self.trial('HKMA-scout')
         self.assertEqual(result['scout_evaluations'],10)
-        self.assertEqual(result['labeling_cost'],20)
+        self.assertEqual(result['smo_evaluations'],6)
+        self.assertTrue(set(result['initial_row_indices']+result['scout_row_indices']).issubset(result['handoff_row_indices']))
+        self.assertEqual(result['oracle_evaluations'],24)
+        self.assertLessEqual(result['labeling_cost'],24)
         self.assertEqual(n,2)
 
     def test_retrieval_variants_use_local_notes_without_extra_labels(self):
@@ -128,7 +149,8 @@ class RunnerTests(unittest.TestCase):
         with patch.object(hkma_pilot,'embed_texts',embed):
             for method,calls in [('HKMA-rag',1),('HKMA-combined',2)]:
                 result,n=self.trial(method)
-                self.assertEqual(result['labeling_cost'],20)
+                self.assertEqual(result['oracle_evaluations'],24)
+                self.assertLessEqual(result['labeling_cost'],24)
                 self.assertEqual(n,calls)
 
     def test_missing_response_cost_is_unknown(self):

@@ -1,4 +1,4 @@
-"""RQ4: analyze fresh experiment results. See --help for input/output options."""
+"""RQ4: Cost and budget-matched sensitivity."""
 from analysis import run
 
 if __name__ == '__main__':

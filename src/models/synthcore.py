@@ -14,11 +14,22 @@ from src.utils import ezr
 
 SOURCE = Path(__file__).with_name('_synthcore_upstream')
 
-def extract(path, names, namespace):
+def extract(path, names, namespace, sessions=None):
     tree = ast.parse(Path(path).read_text())
     nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
     if {n.name for n in nodes} != set(names):
         raise ValueError(f'Missing pinned functions in {path}: {set(names) - {n.name for n in nodes}}')
+    if sessions is not None:
+        # Adapt only the Diversity session bound; keep the pinned file intact.
+        loops = [n for root in nodes for n in ast.walk(root)
+                 if isinstance(n, ast.While) and isinstance(n.test, ast.Compare)
+                 and isinstance(n.test.left, ast.Name) and n.test.left.id == 'k'
+                 and len(n.test.comparators) == 1
+                 and isinstance(n.test.comparators[0], ast.Constant)
+                 and n.test.comparators[0].value == 30]
+        if len(loops) != 1:
+            raise ValueError('Pinned Diversity session loop changed')
+        loops[0].test.comparators[0].value = 2 * sessions
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), namespace)
 
 def parse_markdown(data, text):
@@ -60,14 +71,16 @@ def parse_markdown(data, text):
         (best if values[-1] == 'Best' else rest).append(full)
     return best + rest
 
-def run_ensemble(data, model, source, seed, leaf_override=None):
+def run_ensemble(data, model, source, seed, leaf_override=None, sessions=15):
     """Return scores of upstream selected row, selection audit, and ranked pool."""
+    if sessions not in (3, 15):
+        raise ValueError('Supported ensemble schedules are three or fifteen sessions')
     random.seed(seed)
     namespace = dict(vars(ezr))
     # Upstream depth-based dendogram is not the local size-threshold variant.
     extract(source / 'src/utils/ezr.py', ['dendogram', 'leafs'], namespace)
     extract(source / 'src/prompts/synthetic.py', ['rows_to_markdown', 'SYNTHETIC'], namespace)
-    extract(source / 'src/models/warm_start.py', ['warm_smo_plus'], namespace)
+    extract(source / 'src/models/warm_start.py', ['warm_smo_plus'], namespace, sessions=sessions)
     counts = {'d2h_calls': 0, 'chebyshev_calls': 0}
     unique = set()
     def measured(name, fn):
@@ -112,6 +125,8 @@ def run_ensemble(data, model, source, seed, leaf_override=None):
         return done,retained,todo
     namespace['WARM_FEW_API'] = warm
     rows = namespace['warm_smo_plus'](SimpleNamespace(dataset='',llm='openrouter/openai/gpt-oss-120b'), method='LLM',start='Diversity')
+    audit['initial_representatives'] = counts['chebyshev_calls']
+    audit['evaluation_requests'] = audit['initial_representatives'] + sum(s['generated_count'] for s in audit['sessions'])
     counts['unique_scored_rows'] = len(unique)
     audit['objective_access'] = counts
     scores = {'d2h': ezr.d2h(data,rows[0]),'chebyshev':ezr.chebyshev(data,rows[0])}

@@ -1,4 +1,4 @@
-"""RQ2: analyze fresh experiment results. See --help for input/output options."""
+"""RQ2: Performance across dimensionality."""
 from analysis import run
 
 if __name__ == '__main__':

@@ -16,9 +16,7 @@ from statistics import mean, median
 from stats.scott_knott import rank_methods
 
 ROOT = Path(__file__).resolve().parent
-METHODS = ('Random', 'EZR', 'RRP', 'BS-LLM', 'SynthCore', 'AMP-2', 'AMP-3',
-           'AMP-4', 'DAPR', 'HKMA-scout', 'HKMA-rag', 'HKMA-combined')
-METRICS = ('d2h', 'chebyshev')
+from study import METHODS, METRICS, OPTIONAL_METHODS, PROTOCOL_VERSION, QUESTIONS, SENSITIVITY_METHODS, normalize_preparation
 COSTS = ('llm_calls', 'input_tokens', 'output_tokens', 'total_tokens',
          'api_cost_usd', 'wall_seconds')
 SK = dict(seed=20261016, bootstrap_samples=512, bootstrap_alpha=.05, cliffs_delta=.147)
@@ -36,11 +34,11 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def expected_groups(manifest, cohort):
+def expected_groups(manifest, cohort, methods=METHODS):
     groups = {}
     for dataset in manifest[cohort]:
         ident = dataset['id']
-        for method in METHODS:
+        for method in methods:
             groups[(ident, method, '')] = dataset
         if cohort == 'expert':
             tracks = dataset.get('knowledge_tracks', [])
@@ -85,10 +83,10 @@ def load_trials(path):
     return records
 
 
-def validate_trials(records, manifest, cohort, expected_repeats):
+def validate_trials(records, manifest, cohort, expected_repeats, methods=METHODS):
     if expected_repeats < 2:
         raise AnalysisError('At least two repeats are required for bootstrap variance estimates')
-    expected = expected_groups(manifest, cohort)
+    expected = expected_groups(manifest, cohort, methods)
     groups = defaultdict(list)
     seen = set()
     for record in records:
@@ -96,6 +94,10 @@ def validate_trials(records, manifest, cohort, expected_repeats):
             raise AnalysisError(f"Unknown or missing cohort at line {record.get('_line', '?')}")
         if record['cohort'] != cohort:
             continue
+        if record.get('method') in OPTIONAL_METHODS and record['method'] not in methods:
+            continue
+        if record.get('protocol_version') != PROTOCOL_VERSION:
+            raise AnalysisError(f"Unsupported trial protocol at line {record.get('_line', '?')}; rerun with {PROTOCOL_VERSION}")
         key = (record.get('dataset'), record.get('method'), record.get('expert_id', ''))
         if key not in expected:
             raise AnalysisError(f'Unexpected {cohort} group {key}')
@@ -183,8 +185,7 @@ def attach_expert_tracks(manifest, records, require_hdkp=True):
         dataset['knowledge_tracks'] = [dict(expert_id=track) for track in tracks]
 
 
-def memberships(groups, datasets, pool='full', metrics=METRICS):
-    methods = tuple(m for m in METHODS if pool != 'without_dapr' or m != 'DAPR')
+def memberships(groups, datasets, pool='primary', metrics=METRICS, methods=METHODS):
     expert_number = int(pool.split('_')[1]) if pool.startswith('expert_') else None
     if expert_number:
         methods += ('H-DKP',)
@@ -262,37 +263,76 @@ def format_value(value):
 
 
 def paper_layout(name, rows):
-    """Keep CSV evidence long-form; render manuscript tables in readable columns."""
-    if name in ('table3_best_group', 'table5_without_dapr'):
-        methods = sorted({r['method'] for r in rows}, key=lambda m: (
-            -next(r['scott_knott_count'] for r in rows if r['method']==m and r['metric']=='d2h'), m))
-        def cell(method, metric):
-            r=next(x for x in rows if x['method']==method and x['metric']==metric)
-            return f"{r['scott_knott_count']} ({r['percent']:.1f}%)" if name=='table3_best_group' else r['scott_knott_count']
-        return ['Method','d2h','Chebyshev'], [[m,cell(m,'d2h'),cell(m,'chebyshev')] for m in methods]
-    if name=='table4_equal_dataset_means':
-        methods=sorted({r['method'] for r in rows})
-        return ['Method','d2h','Chebyshev'], [[m]+[f"{next(r['equal_dataset_mean'] for r in rows if r['method']==m and r['metric']==metric):.4f}" for metric in METRICS] for m in methods]
-    if name=='table6_dimensionality':
-        methods=sorted({r['method'] for r in rows})
-        return ['Method','d2h low','d2h medium','d2h high','Chebyshev low','Chebyshev medium','Chebyshev high'], [
-            [m]+[next(r['scott_knott_count'] for r in rows if r['method']==m and r['metric']==metric and r['tier']==band)
-                  for metric in METRICS for band in ('low','medium','high')] for m in methods]
-    if name=='table7_expert_best_group':
-        methods=sorted({r['method'] for r in rows})
-        pools=sorted({r['pool'] for r in rows})
-        return ['Method']+[f'Expert pool {i+1}' for i in range(len(pools))], [[m]+[
-            f"{next(r['scott_knott_count'] for r in rows if r['method']==m and r['pool']==pool)}/{next(r['datasets'] for r in rows if r['method']==m and r['pool']==pool)}"
+    """Keep detailed CSV evidence; render the draft's compact table layouts."""
+    def number(value, digits=4):
+        return 'unavailable' if value is None else f'{value:.{digits}f}'
+    if name == 'primary_low_label':
+        total = rows[0]['datasets']
+        bands = ('low', 'medium', 'high')
+        headings = ['Method', f'Best /{total} (%)'] + [f"{band.title()} /{rows[0][band + '_datasets']}" for band in bands] + ['Mean D']
+        return headings, [[r['method'], f"{r['best_group_count']} ({r['percent']:.1f}%)",
+                           *[r[band + '_best'] for band in bands], number(r['mean_chebyshev'])] for r in rows]
+    if name == 'synthcore28_sensitivity':
+        return ['Method', 'Distinct labels', f"Best /{rows[0]['datasets']}", 'Mean D'], [
+            [r['method'], number(r['mean_distinct_labels'], 2), r['best_group_count'], number(r['mean_chebyshev'])] for r in rows]
+    if name == 'expert_low_label':
+        methods = sorted({r['method'] for r in rows})
+        pools = sorted({r['pool'] for r in rows})
+        lookup = {(r['method'], r['pool']): r for r in rows}
+        return ['Method'] + pools, [[m] + [
+            f"{lookup[m, pool]['scott_knott_count']}/{lookup[m, pool]['datasets']} ({lookup[m, pool]['percent']:.1f}%)"
             for pool in pools] for m in methods]
-    if name=='table8_operational_cost':
-        def num(value,digits): return 'unavailable' if value is None else f'{value:.{digits}f}'
-        return ['Method','LLM calls','Tokens','API cost (USD)','Wall (s)'], [[
-            r['method']+(' '+r['expert_id'] if r['expert_id'] else ''),
-            num(r['llm_calls_per_successful_repeat'],2),num(r['total_tokens_per_successful_repeat'],0),
-            num(r['api_cost_usd_per_successful_repeat'],6),num(r['wall_seconds_per_successful_repeat'],4)] for r in rows]
-    if name=='table1_expert_cohort':
-        return ['Dataset','Inputs','Objectives','Tier','Tracks'], [[r['display_name'],r['feature_count'],r['objective_count'],r['tier'],r['expert_tracks']] for r in rows]
+    if name == 'operational_cost':
+        return ['Method', 'Calls', 'Tokens', 'API cost (USD)', 'Time (s)'], [[
+            r['method'] + (' ' + r['expert_id'] if r['expert_id'] else ''),
+            number(r['llm_calls_per_successful_repeat'], 2), number(r['total_tokens_per_successful_repeat'], 0),
+            number(r['api_cost_usd_per_successful_repeat'], 6), number(r['wall_seconds_per_successful_repeat'], 2)] for r in rows]
+    if name == 'offline_preparation':
+        return ['Dataset', 'Track', 'Contacts', 'Gen. exchanges', 'Nominal accesses', 'Distinct labels'], [[
+            r['dataset'], r['expert_id'], r['expert_contacts'], r['generation_exchanges'],
+            r['nominal_benchmark_accesses'], r['distinct_labels']] for r in rows]
     return list(rows[0]), [[format_value(r[k]) for k in rows[0]] for r in rows]
+
+
+def performance_table(groups, datasets, ranks, methods=METHODS, include_labels=False):
+    counts = summarize_memberships(ranks)
+    tiers = summarize_memberships(ranks, by_tier=True)
+    rows = []
+    for method in methods:
+        overall = next(r for r in counts if r['method'] == method)
+        row = dict(method=method, datasets=overall['datasets'],
+                   best_group_count=overall['scott_knott_count'], percent=overall['percent'])
+        if not include_labels:
+            for band in ('low', 'medium', 'high'):
+                entry = next((r for r in tiers if r['method'] == method and r['tier'] == band), None)
+                row[band + '_best'] = entry['scott_knott_count'] if entry else 0
+                row[band + '_datasets'] = entry['datasets'] if entry else 0
+        row['mean_chebyshev'] = mean(mean(r['chebyshev'] for r in successful(groups, (d['id'], method, '')))
+                                      for d in datasets)
+        if include_labels:
+            per_dataset = [complete_mean(successful(groups, (d['id'], method, '')), 'labeling_cost')
+                           for d in datasets]
+            row['mean_distinct_labels'] = mean(per_dataset) if all(v is not None for v in per_dataset) else None
+        rows.append(row)
+    return sorted(rows, key=lambda r: (-r['best_group_count'], r['mean_chebyshev'], r['method']))
+
+
+def preparation_summary(records):
+    """Count one offline preparation record per frozen rule set, never per trial."""
+    by_track = {}
+    for record in records:
+        if record.get('method') != 'H-DKP':
+            continue
+        key = (record['dataset'], record['expert_id'])
+        try:
+            value = dict(rules_sha256=record.get('rules_sha256'), **normalize_preparation(record.get('preparation') or {}))
+        except ValueError as exc:
+            raise AnalysisError(str(exc)) from exc
+        if key in by_track and by_track[key] != value:
+            raise AnalysisError(f'Conflicting offline preparation metadata: {key}')
+        by_track[key] = value
+    return [dict(dataset=dataset, expert_id=track, **value)
+            for (dataset, track), value in sorted(by_track.items())]
 
 
 def write_table(output, name, rows):
@@ -322,8 +362,6 @@ def run(rq, argv=None):
     parser.add_argument('--trials', type=Path, required=True, help='Fresh runner JSONL')
     parser.add_argument('--output', type=Path, required=True, help='New or empty output directory')
     parser.add_argument('--expected-repeats', type=int, default=20)
-    if rq == 2:
-        parser.add_argument('--without-dapr', action='store_true', help='Also produce reduced-pool tier supplement')
     if rq == 4:
         parser.add_argument('--cohort', choices=('automated', 'expert'), default='automated')
     args = parser.parse_args(argv)
@@ -338,18 +376,21 @@ def run(rq, argv=None):
         records = load_trials(args.trials)
         if cohort == 'expert':
             attach_expert_tracks(manifest, records, require_hdkp=(rq == 3))
-        groups, coverage = validate_trials(records, manifest, cohort, args.expected_repeats)
+        methods = SENSITIVITY_METHODS if rq == 4 and cohort == 'automated' else METHODS
+        groups, coverage = validate_trials(records, manifest, cohort, args.expected_repeats, methods)
         write_table(output, 'coverage', coverage)
-        metadata = dict(rq=rq, cohort=cohort, trials_sha256=sha256(args.trials),
+        metadata = dict(rq=rq, question=QUESTIONS[rq], protocol_version=PROTOCOL_VERSION,
+                        methods=list(methods), metric='chebyshev', cohort=cohort, trials_sha256=sha256(args.trials),
                         manifest_sha256=sha256(manifest_path),
                         analysis_sha256=sha256(Path(__file__)),
                         scott_knott_sha256=sha256(ROOT / 'stats/scott_knott.py'),
                         expected_repeats=args.expected_repeats, statistical_settings=SK,
                         ignored_other_cohort_attempts=sum(r['cohort'] != cohort for r in records),
+                        ignored_out_of_scope_attempts=sum(r['cohort'] == cohort and r.get('method') in OPTIONAL_METHODS and r['method'] not in methods for r in records),
                         complete=not any(r['missing_successes'] for r in coverage),
                         failed_attempts=sum(r['failed_attempts'] for r in coverage),
                         missing_successes=sum(r['missing_successes'] for r in coverage),
-                        score_estimand='equal weight per dataset; successful final-optimizer trials',
+                        score_estimand='equal weight per dataset; Chebyshev audit of the d2h-selected final configuration',
                         cost_estimand='observed attempts; successful-repeat mean and all-attempt spend per success',
                         seed_context='seed:pool/metric/sk_dataset (or display_name or id)')
         (output / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
@@ -357,59 +398,60 @@ def run(rq, argv=None):
         if rq != 4:
             require_complete(coverage)
         datasets = manifest[cohort]
-        if rq == 1:
-            full = memberships(groups, datasets)
-            reduced = memberships(groups, datasets, 'without_dapr')
-            write_table(output, 'membership', full + reduced)
-            write_table(output, 'table3_best_group', summarize_memberships(full))
-            write_table(output, 'table4_equal_dataset_means', equal_dataset_means(groups, [d['id'] for d in datasets]))
-            write_table(output, 'table5_without_dapr', summarize_memberships(reduced))
-        elif rq == 2:
-            full = memberships(groups, datasets)
-            write_table(output, 'membership', full)
-            write_table(output, 'table6_dimensionality', summarize_memberships(full, by_tier=True))
-            if args.without_dapr:
-                reduced = memberships(groups, datasets, 'without_dapr')
-                write_table(output, 'supplement_without_dapr_membership', reduced)
-                write_table(output, 'supplement_without_dapr_tiers', summarize_memberships(reduced, by_tier=True))
+        if rq in (1, 2):
+            ranks = memberships(groups, datasets)
+            write_table(output, 'membership', ranks)
+            write_table(output, 'primary_low_label', performance_table(groups, datasets, ranks))
+            if rq == 2:
+                write_table(output, 'dimensionality', summarize_memberships(ranks, by_tier=True))
         elif rq == 3:
             ranks, medians = [], []
             pools = range(1, max(len(d['knowledge_tracks']) for d in datasets) + 1)
             for expert in pools:
-                ranks += memberships(groups, datasets, f'expert_{expert}', metrics=('d2h',))
+                ranks += memberships(groups, datasets, f'expert_{expert}')
                 for dataset in datasets:
                     track = expert_track(dataset, expert)
-                    hdkp = median(r['d2h'] for r in successful(groups, (dataset['id'], 'H-DKP', track)))
-                    baseline = median(r['d2h'] for r in successful(groups, (dataset['id'], 'BS-LLM', '')))
-                    medians.append(dict(pool=f'expert_{expert}', dataset=dataset['id'], expert_id=track,
-                                        hdkp_median_d2h=hdkp, bs_llm_median_d2h=baseline,
-                                        comparison='lower' if hdkp < baseline else 'higher' if hdkp > baseline else 'equal'))
+                    hdkp = median(r['chebyshev'] for r in successful(groups, (dataset['id'], 'H-DKP', track)))
+                    row = dict(pool=f'expert_{expert}', dataset=dataset['id'], expert_id=track,
+                               hdkp_median_chebyshev=hdkp)
+                    for method, prefix in (('BS-LLM', 'bs_llm'), ('EZR', 'ezr')):
+                        value = median(r['chebyshev'] for r in successful(groups, (dataset['id'], method, '')))
+                        row[prefix + '_median_chebyshev'] = value
+                        row[prefix + '_comparison'] = 'lower' if hdkp < value else 'higher' if hdkp > value else 'equal'
+                    medians.append(row)
             write_table(output, 'membership', ranks)
-            write_table(output, 'table7_expert_best_group', summarize_memberships(ranks))
+            write_table(output, 'expert_low_label', summarize_memberships(ranks))
             write_table(output, 'expert_median_comparison', medians)
-            for expert in pools:
-                selected = [r for r in medians if r['pool'] == f'expert_{expert}']
-                print(f"Expert {expert} H-DKP median vs BS-LLM: " + ', '.join(f"{kind}={sum(r['comparison'] == kind for r in selected)}" for kind in ('lower', 'equal', 'higher')))
-            write_table(output, 'table1_expert_cohort', [dict(dataset=d['id'], display_name=d.get('display_name', d['id']),
+            write_table(output, 'expert_cohort', [dict(dataset=d['id'], display_name=d.get('display_name', d['id']),
                         feature_count=d['feature_count'], objective_count=d.get('objective_count'), tier=tier(d['feature_count']),
                         expert_tracks=len(d['knowledge_tracks'])) for d in datasets])
         else:
             from experiments.remaining_methods.run import METHOD_CALLS
-            write_table(output, 'table2_amp_design', [dict(condition=m, analysis='Yes',
+            write_table(output, 'amp_design', [dict(condition=m, analysis='Yes',
                         constraints='No' if m=='AMP-2' else 'Yes',
                         validation='Yes' if m=='AMP-4' else 'No', calls=METHOD_CALLS[m])
                         for m in ('AMP-2','AMP-3','AMP-4')])
-            write_table(output, 'table8_operational_cost', cost_summary(groups))
+            write_table(output, 'operational_cost', cost_summary(groups))
             labeling = []
             for (dataset, method, expert_id), attempts in groups.items():
-                values = [r['labeling_cost'] for r in attempts if r['status'] == 'success']
+                successes = [r for r in attempts if r['status'] == 'success']
+                values = [r['labeling_cost'] for r in successes]
                 available = bool(values) and all(v is not None for v in values)
                 labeling.append(dict(dataset=dataset, method=method, expert_id=expert_id,
                                      successful_repeats=len(values), missing_labeling_cost=sum(v is None for v in values),
-                                     mean=mean(values) if available else None,
-                                     minimum=min(values) if available else None, maximum=max(values) if available else None))
+                                     mean_distinct_labels=mean(values) if available else None,
+                                     min_distinct_labels=min(values) if available else None,
+                                     max_distinct_labels=max(values) if available else None,
+                                     mean_evaluation_requests=complete_mean(successes, 'oracle_evaluations'),
+                                     nominal_budget=complete_mean(successes, 'nominal_labeling_budget')))
             write_table(output, 'labeling_cost_by_dataset', labeling)
+            write_table(output, 'offline_preparation', preparation_summary(
+                [r for r in records if r.get('cohort') == cohort]))
+            if cohort == 'automated' and metadata['complete']:
+                ranks = memberships(groups, datasets, pool='synthcore28', methods=methods)
+                write_table(output, 'membership', ranks)
+                write_table(output, 'synthcore28_sensitivity', performance_table(groups, datasets, ranks, methods, include_labels=True))
             if not metadata['complete']:
-                print('Incomplete cohort: costs describe observed attempts only; inspect coverage.csv.')
+                print('Incomplete cohort: costs describe observed attempts only; comparative sensitivity tables were not generated. Inspect coverage.csv.')
     except (AnalysisError, OSError, KeyError, json.JSONDecodeError) as exc:
         parser.exit(2, f'error: {exc}\n')

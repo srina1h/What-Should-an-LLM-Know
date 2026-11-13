@@ -32,7 +32,7 @@ class AMP_Strategy(BaseStrategy):
         # Full description including objectives: used for analysis/reasoning
         objectives_desc = []
         for c in self.data.cols.y:
-            direction = "Maximize" if (hasattr(c, 'w') and c.w > 0) else "Minimize"
+            direction = "Maximize" if c.maximize else "Minimize"
             if hasattr(c, 'lo'): # NUM
                 objectives_desc.append(f"- {c.txt} (Objective - {direction}): {c.lo} to {c.hi}")
             else: # SYM

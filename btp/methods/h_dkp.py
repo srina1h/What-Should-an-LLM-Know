@@ -2,6 +2,7 @@ import os
 from btp.methods.base import BaseStrategy
 from src.language import load_model
 from btp.methods.utils import parse_json_output
+from btp.prompts.warm_start import task_metadata
 
 class H_DKP_Strategy(BaseStrategy):
     """
@@ -30,14 +31,7 @@ class H_DKP_Strategy(BaseStrategy):
         feature_order = [col.txt for col in self.data.cols.x]
         best_features = [[row[col.at] for col in self.data.cols.x] for row in best_rows]
         rest_features = [[row[col.at] for col in self.data.cols.x] for row in rest_rows]
-        features_desc = []
-        for c in self.data.cols.x:
-            if hasattr(c, 'lo'):
-                features_desc.append(f"- {c.txt}: {c.lo} to {c.hi}")
-            else:
-                vals = list(c.has.keys()) if c.has else []
-                features_desc.append(f"- {c.txt}: {vals}")
-        features_desc = "\n".join(features_desc)
+        features_desc = task_metadata(self.data)
         prompt = [
             {"role": "system", "content": f"""You are a domain expert.
 Dataset Features:
