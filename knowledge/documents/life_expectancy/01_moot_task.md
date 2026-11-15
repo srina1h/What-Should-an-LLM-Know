@@ -1,10 +1,10 @@
 ---
 source_id: moot_health_data_readme
 dataset_id: life_expectancy
-source_path: third_party/moot/optimize/health_data/README.md
+upstream_path: optimize/health_data/README.md
 source_url: https://github.com/timm/moot/blob/main/optimize/health_data/README.md
 source_kind: repository_documentation
-source_status: locally_available
+source_status: public_reference
 ---
 
 # MOOT Life Expectancy task

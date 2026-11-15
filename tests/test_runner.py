@@ -3,7 +3,6 @@ import contextlib
 import io
 import json
 from pathlib import Path
-import re
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -29,13 +28,6 @@ class FakeModel:
             content='|A|B|C|D|Class|\n|---|---|---|---|---|\n|1|2|3|4|Best|\n|2|3|4|5|Best|\n|7|8|9|1|Rest|\n|8|9|1|2|Rest|'
         elif self.method=='BS-LLM':
             content='BETTER:\n- A=1, B=2, C=3, D=4\n- A=2, B=3, C=4, D=5\nWORSE:\n- A=7, B=8, C=9, D=1\n- A=8, B=9, C=1, D=2'
-        elif self.method=='DAPR':
-            text=str(messages)
-            if 'reduced feature subspace' in text:
-                size=int(re.search(r'exactly (\d+) values',text)[1])
-                content=json.dumps({'candidates':[[i+1]*size for i in range(4)]})
-            else:
-                content='BETTER:\n- A=1, B=2, C=3, D=4\n- A=2, B=3, C=4, D=5\nWORSE:\n- A=7, B=8, C=9, D=1\n- A=8, B=9, C=1, D=2'
         elif self.method.startswith('AMP-'):
             n=int(self.method[-1])
             if self.calls==1:content='A and B describe feature relationships.'
@@ -108,27 +100,29 @@ class RunnerTests(unittest.TestCase):
     def test_three_session_synthcore_is_available(self):
         result,n=self.trial('SynthCore-28')
         self.assertEqual(result['nominal_labeling_budget'],28)
+        self.assertEqual(result['oracle_evaluations'],28)
+        self.assertLessEqual(result['labeling_cost'],28)
         self.assertEqual(result['generation_sessions'],3)
         self.assertEqual(result['selection_metric'],'d2h')
         self.assertFalse(result['downstream_smo'])
         self.assertEqual(rerun.call_limit({'method':'SynthCore-28'}),3)
         self.assertEqual(n,3)
 
-    def test_dapr_intermediate_evaluations_are_additional(self):
-        result,n=self.trial('DAPR')
-        self.assertEqual(result['intermediate_labeling_cost'],8)
-        self.assertEqual(result['labeling_cost'],32)
-        self.assertEqual(n,3)
+    def test_out_of_scope_methods_are_rejected_before_execution(self):
+        for method in ('unknown-method', 'SynthCore'):
+            with self.subTest(method=method), self.assertRaisesRegex(ValueError, 'Unsupported'):
+                self.trial(method)
 
-    def test_synthcore_retains_its_own_schedule(self):
-        result,n=self.trial('SynthCore')
-        self.assertEqual(result['nominal_labeling_budget'],76)
-        self.assertTrue(16 <= result['labeling_cost'] <= 76)
-        self.assertEqual(result['generation_sessions'],15)
-        self.assertEqual(result['selection_metric'],'d2h')
-        self.assertFalse(result['downstream_smo'])
-        self.assertEqual(rerun.call_limit({'method':'SynthCore'}),15)
-        self.assertEqual(n,15)
+    def test_rrp_counts_the_returned_row_and_respects_cap(self):
+        result, calls = self.trial('RRP')
+        self.assertLessEqual(result['oracle_evaluations'], 24)
+        self.assertEqual(result['nominal_labeling_budget'], 24)
+        self.assertEqual(calls, 0)
+        from src.utils.ezr import DATA, csv
+        data = DATA(csv(str(self.data)))
+        evaluated = [data.rows[ix] for ix in result['evaluated_row_indices']]
+        self.assertIn(result['selected_row'], evaluated)
+        self.assertEqual(result['labeling_cost'], len({tuple(row) for row in evaluated}))
 
     def test_scouting_is_charged_inside_hkma_budget(self):
         result,n=self.trial('HKMA-scout')
@@ -141,12 +135,12 @@ class RunnerTests(unittest.TestCase):
 
     def test_retrieval_variants_use_local_notes_without_extra_labels(self):
         import numpy as np
-        from experiments.remaining_methods import hkma_pilot
+        from experiments.evaluation import hkma
         notes=self.root/'notes/task';notes.mkdir(parents=True)
         (notes/'source.md').write_text('A is a numeric input. B is another numeric input.')
         def embed(texts):
             return np.array([[len(t),sum(map(ord,t))%13,1,2] for t in texts],dtype=float)
-        with patch.object(hkma_pilot,'embed_texts',embed):
+        with patch.object(hkma,'embed_texts',embed):
             for method,calls in [('HKMA-rag',1),('HKMA-combined',2)]:
                 result,n=self.trial(method)
                 self.assertEqual(result['oracle_evaluations'],24)
@@ -173,9 +167,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(usage['total_tokens'],30)
 
     def test_packaged_correction_helpers_import(self):
-        from experiments.remaining_methods import dapr_repair2,amp_generation_repair_v6
-        self.assertTrue(callable(dapr_repair2.RepairingModelV2))
-        self.assertTrue(callable(amp_generation_repair_v6.with_fresh_amp_generation_repair))
+        from experiments.evaluation import amp_retry
+        self.assertTrue(callable(amp_retry.with_fresh_amp_generation_repair))
 
 
 if __name__=='__main__':

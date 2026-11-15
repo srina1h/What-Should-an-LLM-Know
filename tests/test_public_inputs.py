@@ -10,7 +10,7 @@ import rerun
 
 class PublicInputsTests(unittest.TestCase):
     def test_only_current_dataset_versions_are_bundled(self):
-        manifest=rerun.load_manifest()
+        manifest=rerun.load_datasets()
         self.assertEqual(len(manifest['automated']),49)
         self.assertEqual(len(manifest['expert']),8)
         paths={d['path'] for cohort in ('automated','expert') for d in manifest[cohort]}
@@ -24,7 +24,7 @@ class PublicInputsTests(unittest.TestCase):
         self.assertFalse((rerun.ROOT/'API_COST_PROVENANCE.md').exists())
 
     def test_all_bundled_hashes_match_fresh_checkout(self):
-        self.assertEqual(rerun.validate_inputs(rerun.load_manifest()),54)
+        self.assertEqual(rerun.validate_inputs(rerun.load_datasets()),54)
 
     def test_hdkp_requires_replicators_rules(self):
         manifest={'expert':[dict(id='task')]}
@@ -54,5 +54,25 @@ class PublicInputsTests(unittest.TestCase):
         analysis.attach_expert_tracks(manifest,[],require_hdkp=False)
         self.assertEqual(len(analysis.expected_groups(manifest,'expert')),10)
 
-if __name__=='__main__':
+
+class DatasetFingerprintTests(unittest.TestCase):
+    def test_public_expert_table_changes_invalidate_resume(self):
+        from datasets import dataset_fingerprint
+        import copy
+        original = {'automated': [{'id': 'a', 'sha256': 'one'}],
+                    'expert': [{'id': 'b', 'sha256': 'two'}]}
+        changed = copy.deepcopy(original)
+        changed['expert'][0]['sha256'] = 'different'
+        self.assertNotEqual(dataset_fingerprint(original), dataset_fingerprint(changed))
+
+    def test_adding_external_rules_preserves_public_fingerprint(self):
+        from datasets import dataset_fingerprint
+        original = {'automated': [], 'expert': [{'id': 'b', 'sha256': 'two'}]}
+        before = dataset_fingerprint(original)
+        original['expert'][0]['knowledge_tracks'] = [{'expert_id': 'synthetic', 'sha256': 'rule'}]
+        original['_require_hdkp'] = True
+        self.assertEqual(before, dataset_fingerprint(original))
+
+
+if __name__ == "__main__":
     unittest.main()

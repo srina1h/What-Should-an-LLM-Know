@@ -1,10 +1,10 @@
 ---
 source_id: moot_rl_readme
 dataset_id: a2c_cartpole
-source_path: third_party/moot/optimize/rl/README.md
+upstream_path: optimize/rl/README.md
 source_url: https://github.com/timm/moot/blob/main/optimize/rl/README.md
 source_kind: repository_documentation
-source_status: locally_available
+source_status: public_reference
 ---
 
 # MOOT A2C CartPole task

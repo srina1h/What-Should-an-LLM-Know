@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: pom3a
-source_path: third_party/moot/optimize/process/README.md
+upstream_path: optimize/process/README.md
 dataset_path: data/process/pom3a.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # pom3a: task and column map

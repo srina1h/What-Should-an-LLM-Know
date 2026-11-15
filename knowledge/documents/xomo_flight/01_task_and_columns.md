@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: xomo_flight
-source_path: third_party/moot/optimize/process/README.md
+upstream_path: optimize/process/README.md
 dataset_path: data/process/xomo_flight.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # xomo_flight: task and column map

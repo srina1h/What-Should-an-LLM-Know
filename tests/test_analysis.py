@@ -18,7 +18,8 @@ def dataset(ident='task', tracks=1, features=4):
 def record(dataset='task', method='Random', rep=0, cohort='automated', expert_id='', score=.2,
            status='success', api_cost=.01):
     return dict(dataset=dataset, method=method, rep=rep, cohort=cohort, expert_id=expert_id,
-                protocol_version=a.PROTOCOL_VERSION, status=status, feature_count=4, d2h=score, chebyshev=score, labeling_cost=24,
+                oracle_evaluations=24, generation_sessions=3, initial_representatives=16,
+                nominal_labeling_budget=28 if method == 'SynthCore-28' else 24, status=status, feature_count=4, d2h=score, chebyshev=score, labeling_cost=24,
                 llm_calls=1, input_tokens=10, output_tokens=5, total_tokens=15,
                 api_cost_usd=api_cost, wall_seconds=2.)
 

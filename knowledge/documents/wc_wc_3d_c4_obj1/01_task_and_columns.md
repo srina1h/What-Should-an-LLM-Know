@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: wc_wc_3d_c4_obj1
-source_path: third_party/moot/optimize/config/README.md
+upstream_path: optimize/config/README.md
 dataset_path: data/misc/wc+wc-3d-c4-obj1.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # wc+wc-3d-c4-obj1: task and column map

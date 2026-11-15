@@ -440,20 +440,21 @@ def branch(i:data, region:rows=None, stop=None, rest=None, evals=1, before=None)
   else:
     return region,rest,evals
 
-def half(i:data, region:rows, sortp=False, before=None) -> tuple[rows,rows,row]:
+def half(i:data, region:rows, sortp=False, before=None, score=None) -> tuple[rows,rows,row]:
   "Split the `region` in half according to each row's distance to two distant points. Used by `branch()`."
   mid = int(len(region) // 2)
-  left,right,C = _twoFaraway(i, region, sortp=sortp, before=before)
+  left,right,C = _twoFaraway(i, region, sortp=sortp, before=before, score=score)
   project = lambda row1: (dists(i,row1,left)**2 + C**2 - dists(i,row1,right)**2)/(2*C + 1E-30)
   tmp = sorted(region, key=project)
   return tmp[:mid], tmp[mid:], left, right
 
-def _twoFaraway(i:data, region:rows,before=None, sortp=False) -> tuple[row,row,float]:
+def _twoFaraway(i:data, region:rows,before=None, sortp=False, score=None) -> tuple[row,row,float]:
   "Find two distant points within the `region`. Used by `half()`." 
   region = random.choices(region, k=min(the.Half, len(region)))
   x = before or _faraway(i, random.choice(region), region)
   y = _faraway(i, x, region)
-  if sortp and d2h(i,y) < d2h(i,x): x,y = y,x
+  score = score or d2h
+  if sortp and score(i,y) < score(i,x): x,y = y,x
   return x, y,  dists(i,x,y)
 
 def _faraway(i:data, r1:row, region:rows) -> row:

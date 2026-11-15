@@ -22,8 +22,8 @@ class EnsembleTests(unittest.TestCase):
         data=self.data(); model=Model('|A|kind|Class|\n|---|---|---|')
         with patch.object(ezr,'smo',side_effect=AssertionError('No downstream SMO')):
             scores,audit,rows=run_ensemble(data,model,SOURCE,42)
-        self.assertEqual(model.calls,15)
-        self.assertEqual(len(audit['sessions']),15)
+        self.assertEqual(model.calls,3)
+        self.assertEqual(len(audit['sessions']),3)
         self.assertTrue(all(s['generated_count']==0 for s in audit['sessions']))
         self.assertTrue(all(s['retained'] for s in audit['sessions']))
         self.assertEqual(scores['d2h'],min(ezr.d2h(data,r) for r in rows))
@@ -31,7 +31,7 @@ class EnsembleTests(unittest.TestCase):
     def test_interleaved_objective_columns_map_features_by_position(self):
         data=self.data(); model=Model('|A|kind|Class|\n|---|---|---|\n|1e0|x|Best|\n|-2|y|Rest|')
         _,audit,_=run_ensemble(data,model,SOURCE,42)
-        self.assertEqual(model.calls,15)
+        self.assertEqual(model.calls,3)
         for session in audit['sessions']:
             self.assertEqual(session['generated_count'],2)
             self.assertEqual(session['generated'][0],['?',1.0,'x'])

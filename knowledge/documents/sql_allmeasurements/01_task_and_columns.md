@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: sql_allmeasurements
-source_path: third_party/moot/optimize/config/README.md
+upstream_path: optimize/config/README.md
 dataset_path: data/config/SQL_AllMeasurements.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # SQL_AllMeasurements: task and column map

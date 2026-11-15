@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: wine_quality
-source_path: third_party/moot/optimize/misc/README.md
+upstream_path: optimize/misc/README.md
 dataset_path: data/misc/Wine_quality.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # Wine_quality: task and column map

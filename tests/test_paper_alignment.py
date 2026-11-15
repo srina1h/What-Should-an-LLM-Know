@@ -1,4 +1,4 @@
-"""Behavioral checks against the November 13 draft, with synthetic evidence."""
+"""Experiment and analysis checks using artificial data only."""
 import contextlib
 import io
 import json
@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import analysis as a
 import rerun
-from study import METHODS, PROTOCOL_VERSION, SENSITIVITY_METHODS
+from study import METHODS, SENSITIVITY_METHODS
 from test_analysis import dataset, record
 from test_synthcore import Model
 from src.models.synthcore import run_ensemble, SOURCE
@@ -20,27 +20,35 @@ class PaperAlignmentTests(unittest.TestCase):
     def test_default_runner_uses_ten_primary_methods(self):
         self.assertEqual(len(rerun.METHODS), 10)
         self.assertNotIn('SynthCore', rerun.METHODS)
-        self.assertNotIn('DAPR', rerun.METHODS)
         self.assertEqual(a.METRICS, ('chebyshev',))
 
-    def test_old_protocol_cannot_be_silently_relabelled(self):
+    def test_incompatible_evaluation_budget_is_rejected(self):
         manifest = dict(automated=[dataset()])
         old = record()
-        old.pop('protocol_version', None)
-        with self.assertRaisesRegex(a.AnalysisError, 'protocol'):
+        old['oracle_evaluations'] = 20
+        with self.assertRaisesRegex(a.AnalysisError, 'budget'):
             a.validate_trials([old], manifest, 'automated', 2)
 
-    def test_synthcore28_is_exact_three_session_prefix(self):
+    def test_analysis_rejects_different_or_unidentified_dataset_contents(self):
+        item = dataset()
+        item['sha256'] = 'expected-content-hash'
+        for value in (None, 'different-content-hash'):
+            row = record()
+            row['dataset_sha256'] = value
+            with self.assertRaisesRegex(a.AnalysisError, 'content hash'):
+                a.validate_trials([row], {'automated': [item]}, 'automated', 2)
+
+    def test_synthcore_default_is_three_sessions(self):
         text='|A|kind|Class|\n|---|---|---|\n|1|x|Best|\n|2|y|Best|\n|3|x|Rest|\n|4|y|Rest|'
         data=lambda: ezr.DATA([['Score-','A','kind']]+[[i+1,i%7,'x' if i%2 else 'y'] for i in range(64)])
         _, full, _ = run_ensemble(data(), Model(text), SOURCE, 42)
         scores, short, rows = run_ensemble(data(), Model(text), SOURCE, 42, sessions=3)
-        self.assertEqual(short['sessions'], full['sessions'][:3])
+        self.assertEqual(short['sessions'], full['sessions'])
         self.assertEqual(short['evaluation_requests'], short['initial_representatives']+12)
         self.assertEqual(scores['chebyshev'], ezr.chebyshev(data(), rows[0]))
 
     def test_all_observations_survive_and_repeated_mappings_count_once(self):
-        from experiments.remaining_methods.run import optimize
+        from experiments.evaluation.run import optimize
         data=ezr.DATA([['A','Score-']]+[[i,i] for i in range(60)])
         result=optimize(data, lambda best,rest: [[0]]*4, 24, 42, 'equal-oracle')
         self.assertEqual(result['oracle_evaluations'],24)
@@ -80,13 +88,13 @@ class PaperAlignmentTests(unittest.TestCase):
         self.assertIn('Gain+ (Objective - Maximize)',str(capture.messages[0]))
 
     def test_primary_latex_table_matches_compact_paper_columns(self):
-        rows=[dict(method='AMP-4',datasets=49,best_group_count=44,percent=89.8,
-                   low_best=13,low_datasets=15,medium_best=15,medium_datasets=17,
-                   high_best=16,high_datasets=17,mean_chebyshev=.1862)]
+        rows=[dict(method='AMP-4',datasets=49,best_group_count=10,percent=20.4,
+                   low_best=3,low_datasets=15,medium_best=3,medium_datasets=17,
+                   high_best=4,high_datasets=17,mean_chebyshev=.4321)]
         headings,cells=a.paper_layout('primary_low_label',rows)
         self.assertEqual(len(headings),6)
-        self.assertEqual(cells[0][-1],'0.1862')
-        self.assertIn('44',str(cells[0][1]))
+        self.assertEqual(cells[0][-1],'0.4321')
+        self.assertIn('10',str(cells[0][1]))
 
     def test_external_rule_config_preserves_optional_preparation(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -111,7 +119,7 @@ class PaperAlignmentTests(unittest.TestCase):
     def test_expert_trials_can_follow_comparators_without_changing_frozen_rules(self):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder); (root/'manifest.json').write_text('{}')
+            root=Path(folder)
             args=SimpleNamespace(output=str(root/'out'),repeats=1,seed=12345,
                                  repair_invalid=False,retry_failed=False)
             manifest=dict(model={'name':'fixture'})
@@ -138,23 +146,21 @@ class PaperAlignmentTests(unittest.TestCase):
         temp=tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
         root=Path(temp.name)
         manifest=dict(automated=[dataset()],expert=[dataset(tracks=2)])
-        (root/'manifest.json').write_text(json.dumps(manifest))
         (root/'stats').mkdir(); (root/'stats/scott_knott.py').write_text('fixture')
         cohort='expert' if rq==3 else 'automated'
         methods=list(METHODS)+(['SynthCore-28'] if include_sensitivity and rq==4 else [])
         rows=[record(method=m, rep=n, cohort=cohort, score=.5) for m in methods for n in range(2)]
         for row in rows:
-            row['protocol_version']=PROTOCOL_VERSION
             row['d2h']=.1
             if row['method']=='AMP-4': row['chebyshev']=0.
         if rq==3:
             rows += [dict(record(method='H-DKP',rep=n,cohort=cohort,expert_id=track),
-                          protocol_version=PROTOCOL_VERSION, d2h=.9, chebyshev=0.)
+                          d2h=.9, chebyshev=0.)
                      for track in ('expert_01','expert_02') for n in range(2)]
         if not complete: rows.pop()
         ledger=root/'trials.jsonl'
         ledger.write_text(''.join(json.dumps(r)+'\n' for r in rows))
-        with patch.object(a,'ROOT',root), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(a,'ROOT',root), patch.object(a,'load_datasets',return_value=manifest), contextlib.redirect_stdout(io.StringIO()):
             a.run(rq,['--trials',str(ledger),'--output',str(root/'out'),'--expected-repeats','2'])
         return root/'out'
 
@@ -163,7 +169,6 @@ class PaperAlignmentTests(unittest.TestCase):
         text=(output/'primary_low_label.csv').read_text()
         self.assertIn('mean_chebyshev',text)
         self.assertNotIn('d2h',text)
-        self.assertNotIn('DAPR',text)
         self.assertNotIn('SynthCore',text)
         self.assertEqual(len(text.splitlines()),11)
 

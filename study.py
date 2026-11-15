@@ -1,9 +1,39 @@
-"""Comparison scopes and trial identity for the November 13, 2026 draft."""
-PROTOCOL_VERSION = 'paper-2026-11-13'
+"""Comparison methods and research questions."""
 METHODS = ('Random', 'EZR', 'RRP', 'BS-LLM', 'AMP-2', 'AMP-3', 'AMP-4',
            'HKMA-scout', 'HKMA-rag', 'HKMA-combined')
 SENSITIVITY_METHODS = METHODS + ('SynthCore-28',)
-OPTIONAL_METHODS = ('SynthCore-28', 'SynthCore', 'DAPR')
+OPTIONAL_METHODS = ('SynthCore-28',)
+PRIMARY_BUDGET = 24
+SYNTHCORE_BUDGET = 28
+
+
+def evaluation_budget(method):
+    """Maximum online evaluation requests in one independent trial."""
+    if method == 'SynthCore-28':
+        return SYNTHCORE_BUDGET
+    if method in METHODS + ('H-DKP',):
+        return PRIMARY_BUDGET
+    raise ValueError(f'Unsupported replication method: {method}')
+
+
+def validate_budget(method, result):
+    """Reject missing, malformed, or excessive online evaluation counts."""
+    limit = evaluation_budget(method)
+    requests = result.get('oracle_evaluations')
+    if type(requests) is not int or not 1 <= requests <= limit:
+        raise ValueError(f'{method}: evaluation count must be an integer in 1..{limit}')
+    if method not in ('RRP', 'SynthCore-28') and requests != limit:
+        raise ValueError(f'{method}: expected the full {limit}-evaluation budget')
+    if result.get('nominal_labeling_budget') != limit:
+        raise ValueError(f'{method}: nominal budget must be {limit}')
+    labels = result.get('labeling_cost')
+    if labels is not None and (type(labels) is not int or not 0 <= labels <= requests):
+        raise ValueError(f'{method}: distinct labels cannot exceed evaluation requests')
+    if method == 'SynthCore-28':
+        if result.get('generation_sessions') != 3 or result.get('initial_representatives') != 16:
+            raise ValueError('SynthCore-28 requires 16 initial representatives and three sessions')
+        if requests < 16:
+            raise ValueError('SynthCore-28 must count all 16 initial representatives')
 METRICS = ('chebyshev',)
 QUESTIONS = {
     1: 'With only 24 labels, can domain knowledge help an LLM propose better initial configurations?',

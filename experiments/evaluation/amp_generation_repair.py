@@ -1,5 +1,5 @@
 import json
-from experiments.remaining_methods import run
+from experiments.evaluation import run
 from btp.methods.utils import parse_json_output
 def parse_amp_rows(content):
     parsed = json.loads(content)

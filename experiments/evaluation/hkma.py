@@ -1,4 +1,4 @@
-"""Isolated, offline-first HKMA scouting and document retrieval for the pilot."""
+"""HKMA scouting and retrieval from the public document corpus."""
 from functools import partial
 import hashlib
 import json
@@ -136,7 +136,7 @@ def scout_rows(data, available, seed):
     return selected, ledger
 
 
-class HKMAPilot:
+class HKMA:
     def __init__(self, data, method, model, corpus_root, dataset_id, embed=None, index=None):
         if method not in ("HKMA-scout", "HKMA-rag", "HKMA-combined"):
             raise ValueError("Unknown HKMA condition")

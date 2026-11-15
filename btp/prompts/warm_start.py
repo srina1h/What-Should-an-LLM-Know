@@ -1,4 +1,4 @@
-"""Shared few-shot generation prompt for the LLM and HKMA pilot."""
+"""Shared few-shot generation prompt for the LLM and HKMA."""
 
 
 def warm_start_messages(data, best_rows, rest_rows, context=None):

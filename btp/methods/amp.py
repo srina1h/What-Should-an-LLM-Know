@@ -63,14 +63,12 @@ class AMP_Strategy(BaseStrategy):
             # Skip V
             gen_prompt = get_generation_prompt(analysis, constraints, best_rows, x_features_str)
             gen_response = self.model.invoke(gen_prompt).content
-            print(f"\n[DEBUG R1] AMP-3 Raw Gen Response:\n{gen_response}\n[DEBUG END]")
             draft_best, draft_rest = self._parse_response(gen_response)
             return draft_best + draft_rest
 
         # Stage 3: Generation — only x-features in the output schema
         gen_prompt = get_generation_prompt(analysis, constraints, best_rows, x_features_str)
         gen_response = self.model.invoke(gen_prompt).content
-        print(f"\n[DEBUG R1] AMP-4 Raw Gen Response:\n{gen_response}\n[DEBUG END]")
         
         draft_best, draft_rest = self._parse_response(gen_response)
         if not draft_best: return [], []

@@ -1,10 +1,10 @@
 ---
 source_id: moot_systems_readme
 dataset_id: llvm
-source_path: third_party/moot/optimize/systems/README.md
+upstream_path: optimize/systems/README.md
 source_url: https://github.com/timm/moot/blob/main/optimize/systems/README.md
 source_kind: repository_documentation
-source_status: locally_available
+source_status: public_reference
 ---
 
 # MOOT LLVM task

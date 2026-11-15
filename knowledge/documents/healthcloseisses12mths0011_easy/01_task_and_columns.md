@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: healthcloseisses12mths0011_easy
-source_path: third_party/moot/optimize/hpo/README.md
+upstream_path: optimize/hpo/README.md
 dataset_path: data/hpo/healthCloseIsses12mths0011-easy.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # healthCloseIsses12mths0011-easy: task and column map

@@ -8,7 +8,6 @@ import json
 import time
 from btp.methods.h_dkp import H_DKP_Strategy
 from btp.methods.amp import AMP_Strategy
-from btp.methods.dapr import DAPR_Strategy
 
 def WARM_FEW_API(i: data, args, method = 'LLMExtra'):
 
@@ -185,14 +184,13 @@ def WARM_FEW_API(i: data, args, method = 'LLMExtra'):
         "get the 4 start samples ready for active learning"
         if method == 'LLM':
             results = _synthesise(done)
-        elif method in ['H-DKP', 'AMP', 'DAPR', 'HKMA', 'AAD']:
+        elif method in ['H-DKP', 'AMP', 'HKMA', 'AAD']:
             cut = int(.5 + len(done) ** 0.5)
             best = clone(i, done[:cut]).rows
             rest = clone(i, done[cut:]).rows
 
             if method == 'H-DKP': strategy = H_DKP_Strategy(i, args)
             elif method == 'AMP': strategy = AMP_Strategy(i, args)
-            elif method == 'DAPR': strategy = DAPR_Strategy(i, args)
             elif method == 'HKMA': strategy = HKMA_Strategy(i, args)
             elif method == 'AAD': strategy = AAD_Strategy(i, args)
 

@@ -14,3 +14,8 @@ tables/
 
 expert_inputs/
 expert-rules*.json
+
+knowledge/expert/
+knowledge/human_knowledge/
+*.eml
+*.mbox

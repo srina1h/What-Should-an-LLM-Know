@@ -1,10 +1,10 @@
 ---
 source_id: moot_health_readme
 dataset_id: health_closed_issues
-source_path: third_party/moot/optimize/hpo/README.md
+upstream_path: optimize/hpo/README.md
 source_url: https://github.com/timm/moot/blob/main/optimize/hpo/README.md
 source_kind: repository_documentation
-source_status: locally_available
+source_status: public_reference
 ---
 
 # MOOT project-health task

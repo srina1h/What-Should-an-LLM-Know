@@ -10,11 +10,11 @@ import random
 import re
 import sys
 import time
-from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from study import METHODS, OPTIONAL_METHODS, PROTOCOL_VERSION, normalize_preparation
+from datasets import dataset_fingerprint
+from study import METHODS, OPTIONAL_METHODS, PRIMARY_BUDGET, evaluation_budget, validate_budget, normalize_preparation
 _INDICES = {}
 
 
@@ -25,8 +25,9 @@ def sha(path, normalize_newlines=False):
     return hashlib.sha256(content).hexdigest()
 
 
-def load_manifest():
-    return json.loads((ROOT / 'manifest.json').read_text())
+def load_datasets():
+    from datasets import load_datasets as load
+    return load(ROOT)
 
 
 def validate_inputs(manifest):
@@ -78,13 +79,6 @@ def load_expert_rules(manifest, configuration, selected_datasets=None):
         available[ident]['knowledge_tracks'] = prepared
 
 
-def stage_sizes(p):
-    sizes = list(range(max(1, p // 2), p + 1, 2))
-    if sizes[-1] != p:
-        sizes.append(p)
-    return sizes
-
-
 def make_jobs(manifest, cohort, methods, datasets=None):
     available = {d['id']: d for d in manifest[cohort]}
     selected = list(available) if datasets is None else datasets
@@ -94,6 +88,7 @@ def make_jobs(manifest, cohort, methods, datasets=None):
     for ident in selected:
         item = available[ident]
         for method in methods:
+            evaluation_budget(method)
             if method == 'H-DKP':
                 if not item.get('knowledge_tracks'):
                     raise ValueError(f'{ident}: H-DKP requires your own rules via --expert-rules')
@@ -108,12 +103,10 @@ def make_jobs(manifest, cohort, methods, datasets=None):
 
 def call_limit(job, repair=False):
     method = job['method']
-    n = {'Random': 0, 'EZR': 0, 'RRP': 0, 'BS-LLM': 1, 'SynthCore': 15, 'SynthCore-28': 3,
+    evaluation_budget(method)
+    n = {'Random': 0, 'EZR': 0, 'RRP': 0, 'BS-LLM': 1, 'SynthCore-28': 3,
          'AMP-2': 2, 'AMP-3': 3, 'AMP-4': 7, 'H-DKP': 1,
          'HKMA-scout': 2, 'HKMA-rag': 1, 'HKMA-combined': 2}.get(method)
-    if method == 'DAPR':
-        n = len(stage_sizes(job['input']['feature_count'])) + 1
-        return n * (3 if repair else 1)
     if repair and method in ('AMP-2', 'AMP-3'):
         n += 2
     if repair and method.startswith('HKMA-'):
@@ -142,39 +135,36 @@ def token_usage(directory, calls):
 
 def run_trial(job, directory, seed, model, repair=False):
     """Dispatch to the retained study implementations, using the selected study dataset."""
-    from src.utils.ezr import DATA, csv, d2h, chebyshev, branch, the
-    from experiments.remaining_methods import run
+    from src.utils.ezr import DATA, csv, d2h, chebyshev, the
+    from experiments.evaluation import run
     method, item = job['method'], job['input']
+    budget = evaluation_budget(method)
     path = ROOT / item['path']
     data = DATA(csv(str(path)))
-    the.Last, the.label, the.GuessFaster = 24, 4, True
+    the.Last, the.label, the.GuessFaster = budget, 4, True
     random.seed(seed)
     metadata = dict(dataset_path=str(path.relative_to(ROOT)), dataset_sha256=sha(path, normalize_newlines=True),
                     actual_feature_count=len(data.cols.x))
     if method == 'Random':
-        indices = random.sample(range(len(data.rows)), 24)
+        indices = random.sample(range(len(data.rows)), budget)
         row = min((data.rows[ix] for ix in indices), key=lambda r: d2h(data, r))
         result = dict(selected_row=list(row), evaluated_row_indices=indices,
-                      oracle_evaluations=24, nominal_labeling_budget=24,
+                      oracle_evaluations=budget, nominal_labeling_budget=budget,
                       labeling_cost=len({tuple(data.rows[ix]) for ix in indices}))
     elif method == 'EZR':
-        result = run.optimize(data, None, 24, seed, 'equal-oracle')
+        result = run.optimize(data, None, budget, seed, 'equal-oracle')
         row = result['selected_row']
     elif method == 'RRP':
-        rows, _, evaluations = branch(data, data.rows, 4)
-        row = rows[0]
-        result = dict(selected_row=list(row), labeling_cost=None,
-                      oracle_evaluations=evaluations,
-                      labeling_count_basis='branch evaluation counter; distinct labels unavailable')
-    elif method in ('SynthCore', 'SynthCore-28'):
+        result = run.rrp(data, budget)
+        row = result['selected_row']
+    elif method == 'SynthCore-28':
         from src.models.synthcore import run_ensemble, SOURCE
-        sessions = 3 if method == 'SynthCore-28' else 15
-        _, audit, rows = run_ensemble(data, model, SOURCE, seed, sessions=sessions)
+        _, audit, rows = run_ensemble(data, model, SOURCE, seed)
         row = rows[0]
         result = dict(selected_row=list(row),
                       labeling_cost=audit['objective_access']['unique_scored_rows'],
                       labeling_count_basis='distinct full observed-row tuples scored during the ensemble',
-                      nominal_labeling_budget=16 + 4*sessions,
+                      nominal_labeling_budget=budget,
                       oracle_evaluations=audit['evaluation_requests'],
                       initial_representatives=audit['initial_representatives'],
                       generation_sessions=len(audit['sessions']),
@@ -182,27 +172,8 @@ def run_trial(job, directory, seed, model, repair=False):
                       objective_access=audit['objective_access'])
         (directory/'synthcore_audit.json').write_text(json.dumps(audit, indent=2)+'\n')
     else:
-        pilot = strategy = None
-        if method == 'DAPR':
-            from btp.methods.dapr import DAPR_Strategy
-            pipeline = model
-            if repair:
-                from experiments.remaining_methods.dapr_repair2 import RepairingModelV2
-                pipeline = RepairingModelV2(model, data, max_repairs=2)
-            strategy = DAPR_Strategy(data, SimpleNamespace(llm=run.MODEL, pipeline=pipeline))
-            def generate(best, rest):
-                rows = strategy.generate_examples(best, rest)
-                run.validate_rows(data, rows)
-                if strategy.intermediate_stage_errors:
-                    raise ValueError('DAPR intermediate generation failed')
-                expected = stage_sizes(len(data.cols.x))
-                observed = strategy.intermediate_evaluations
-                if any(sum(x['active_features'] == size for x in observed) != 4 for size in expected):
-                    raise ValueError('DAPR intermediate candidate count disagrees with schedule')
-                return rows
-            scout = None
-        elif method.startswith('HKMA-'):
-            from experiments.remaining_methods.hkma_pilot import HKMAPilot, CorpusIndex
+        if method.startswith('HKMA-'):
+            from experiments.evaluation.hkma import HKMA, CorpusIndex
             corpus_root = ROOT/item['corpus_root']
             index = None
             if method != 'HKMA-scout':
@@ -210,10 +181,10 @@ def run_trial(job, directory, seed, model, repair=False):
                 if index_key not in _INDICES:
                     _INDICES[index_key] = CorpusIndex(corpus_root, item['corpus_dataset_id'])
                 index = _INDICES[index_key]
-            pilot = HKMAPilot(data, method, model, ROOT/item['corpus_root'],
+            hkma_strategy = HKMA(data, method, model, ROOT/item['corpus_root'],
                               item['corpus_dataset_id'], index=index)
-            generate = pilot.generate
-            scout = pilot.scout if method != 'HKMA-rag' else None
+            generate = hkma_strategy.generate
+            scout = hkma_strategy.scout if method != 'HKMA-rag' else None
             if repair:
                 generate = run.with_one_generation_repair(data, method, model, generate)
         else:
@@ -221,21 +192,14 @@ def run_trial(job, directory, seed, model, repair=False):
             generate = run.make_generator(data, 'LLM' if method == 'BS-LLM' else method, model, path, str(knowledge) if knowledge else None)
             scout = None
             if repair and method in ('AMP-2', 'AMP-3'):
-                from experiments.remaining_methods.amp_generation_repair_v6 import with_fresh_amp_generation_repair
+                from experiments.evaluation.amp_retry import with_fresh_amp_generation_repair
                 generate = with_fresh_amp_generation_repair(data, method, model, generate)
-        result = run.optimize(data, generate, 20 if method == 'DAPR' else 24, seed,
-                              'legacy-20-plus-warm' if method == 'DAPR' else 'equal-oracle', scout=scout)
-        result['labeling_cost'] = len({tuple(data.rows[ix]) for ix in result['evaluated_row_indices']})
-        if strategy is not None:
-            result['labeling_cost'] += len(strategy.intermediate_evaluations)
-            result['intermediate_labeling_cost'] = len(strategy.intermediate_evaluations)
+        result = run.optimize(data, generate, budget, seed, 'equal-oracle', scout=scout)
         row = result['selected_row']
-    if method in METHODS and method != 'RRP':
-        result['nominal_labeling_budget'] = 24
     if 'evaluated_row_indices' in result:
-        result['labeling_cost'] = len({tuple(data.rows[ix]) for ix in result['evaluated_row_indices']}) + result.get('intermediate_labeling_cost', 0)
-    result.update(protocol_version=PROTOCOL_VERSION,
-                  d2h=d2h(data, row), chebyshev=chebyshev(data, row), **metadata)
+        result['labeling_cost'] = len({tuple(data.rows[ix]) for ix in result['evaluated_row_indices']})
+    validate_budget(method, result)
+    result.update(d2h=d2h(data, row), chebyshev=chebyshev(data, row), **metadata)
     return result
 
 
@@ -244,7 +208,7 @@ def identity(row):
 
 
 def execute(jobs, args, manifest):
-    from experiments.remaining_methods.run import LoggedModel
+    from experiments.evaluation.run import LoggedModel
     import fcntl
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -254,10 +218,9 @@ def execute(jobs, args, manifest):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError('Another process is writing this run directory')
-        config = dict(protocol_version=PROTOCOL_VERSION, manifest_sha256=sha(ROOT/'manifest.json'), runner_sha256=sha(Path(__file__)),
+        config = dict(datasets_sha256=dataset_fingerprint(manifest), runner_sha256=sha(Path(__file__)),
                       repeats=args.repeats,
                       seed=args.seed, repair_invalid=args.repair_invalid, model=manifest['model'],
-                      generation_protocol='fresh execution of packaged study implementations',
                       per_call_transport_retries=0,
                       external_rule_hashes={j['dataset']+'/'+j['expert_id']: j['knowledge']['sha256']
                                             for j in jobs if j['knowledge']},
@@ -285,7 +248,7 @@ def execute(jobs, args, manifest):
         for job in jobs:
             for rep in range(args.repeats):
                 base = {k: job[k] for k in ('cohort', 'dataset', 'method', 'expert_id')}
-                base.update(rep=rep, feature_count=job['input']['feature_count'], protocol_version=PROTOCOL_VERSION)
+                base.update(rep=rep, feature_count=job['input']['feature_count'])
                 if job['knowledge']:
                     base['rules_sha256'] = job['knowledge']['sha256']
                     if 'preparation' in job['knowledge']:
@@ -303,8 +266,8 @@ def execute(jobs, args, manifest):
                     raise ValueError(f'Interrupted attempt preserved at {directory}; inspect before continuing')
                 directory.mkdir(parents=True)
                 seed = args.seed + rep + int(hashlib.md5(Path(job['input']['path']).name.encode()).hexdigest()[:8],16)%1000000 + attempt*1000003
-                # Saved modern DAPR/AMP/HKMA plans request low reasoning; H-DKP and old arms do not.
-                effort = 'low' if job['method'] in ('DAPR','AMP-2','AMP-3','SynthCore','SynthCore-28') or job['method'].startswith('HKMA-') else None
+                # Explicit reasoning settings for each generation method.
+                effort = 'low' if job['method'] in ('AMP-2','AMP-3','SynthCore-28') or job['method'].startswith('HKMA-') else None
                 model = LoggedModel(directory, seed, call_limit(job, args.repair_invalid), reasoning_effort=effort)
                 base.update(seed=seed, attempt=attempt, repair_invalid=args.repair_invalid,
                             reasoning_effort=effort)
@@ -330,7 +293,7 @@ def execute(jobs, args, manifest):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cohort', choices=('automated','expert'), default='automated')
-    parser.add_argument('--datasets', nargs='+', help='Dataset IDs from manifest.json; default all in cohort')
+    parser.add_argument('--datasets', nargs='+', help='Dataset IDs; default all in cohort')
     parser.add_argument('--methods', nargs='+', choices=METHODS+OPTIONAL_METHODS+('H-DKP',))
     parser.add_argument('--expert-rules', type=Path, help='External JSON mapping dataset IDs to your own reviewed rule files')
     parser.add_argument('--repeats', type=int, default=20)
@@ -348,15 +311,16 @@ def main(argv=None):
         parser.error('H-DKP belongs to the expert cohort')
     if len(set(methods)) != len(methods):
         parser.error('methods must be unique')
-    manifest=load_manifest(); checked=validate_inputs(manifest)
+    manifest=load_datasets(); checked=validate_inputs(manifest)
     if args.expert_rules and args.cohort != 'expert':
         parser.error('--expert-rules is for the expert cohort')
     if args.expert_rules:
         load_expert_rules(manifest, args.expert_rules, args.datasets)
     jobs=make_jobs(manifest,args.cohort,methods,args.datasets)
     calls=args.repeats*sum(call_limit(j,args.repair_invalid) for j in jobs)
-    plan=dict(protocol_version=PROTOCOL_VERSION, methods=methods, cohort=args.cohort,datasets=len({j['dataset'] for j in jobs}),jobs=len(jobs),
+    plan=dict(methods=methods, cohort=args.cohort,datasets=len({j['dataset'] for j in jobs}),jobs=len(jobs),
               repeats=args.repeats,maximum_model_calls=calls,verified_dataset_files=checked,
+              evaluation_budgets={m:evaluation_budget(m) for m in methods},
               model=manifest['model'],repair_invalid=args.repair_invalid,
               retrieval_model=manifest['embedding'],execute=args.execute)
     print(json.dumps(plan,indent=2))

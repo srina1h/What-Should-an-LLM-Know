@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: sol_6d_c2_obj1
-source_path: third_party/moot/optimize/config/README.md
+upstream_path: optimize/config/README.md
 dataset_path: data/misc/sol-6d-c2-obj1.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # sol-6d-c2-obj1: task and column map

@@ -1,6 +1,6 @@
 import json
-from experiments.remaining_methods import run
-from experiments.remaining_methods.amp_generation_repair import parse_amp_rows
+from experiments.evaluation import run
+from experiments.evaluation.amp_generation_repair import parse_amp_rows
 def with_fresh_amp_generation_repair(data, method, model, generate):
     if method not in ("AMP-2", "AMP-3"):
         raise ValueError("Fresh AMP correction is only defined for AMP-2/3")

@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: nasa93dem
-source_path: third_party/moot/optimize/process/README.md
+upstream_path: optimize/process/README.md
 dataset_path: data/process/nasa93dem.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # nasa93dem: task and column map

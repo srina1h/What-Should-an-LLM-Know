@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: ss_c
-source_path: third_party/moot/optimize/config/README.md
+upstream_path: optimize/config/README.md
 dataset_path: data/config/SS-C.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # SS-C: task and column map

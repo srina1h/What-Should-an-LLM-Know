@@ -3,11 +3,13 @@ import fcntl
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import random
 import re
 import time
 from types import SimpleNamespace
+from study import PRIMARY_BUDGET
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = "openrouter/openai/gpt-oss-120b"
 METHOD_CALLS = {"AMP-2": 2, "AMP-3": 3, "AMP-4": 7, "H-DKP": 1, "LLM": 1, "exploit": 0, "HKMA-scout": 2, "HKMA-rag": 1, "HKMA-combined": 2}
@@ -42,18 +44,58 @@ def validate_rows(data, rows):
         expanded.append(full)
     return expanded
 
-def optimize(data, generate, budget, seed, policy, scout=None):
+def rrp(data, budget=PRIMARY_BUDGET):
+    """RRP with cached pole labels and a hard cap, including final selection."""
+    from src.utils.ezr import d2h, half
+    if type(budget) is not int or not 1 <= budget <= PRIMARY_BUDGET:
+        raise ValueError(f'RRP budget must be in 1..{PRIMARY_BUDGET}')
+    if not data.rows:
+        raise ValueError('RRP needs observed rows')
+    indices = {id(row): index for index, row in enumerate(data.rows)}
+    scores, evaluated = {}, []
+
+    class Exhausted(Exception):
+        pass
+
+    def score(i, row):
+        key = tuple(row)
+        if key not in scores:
+            if len(evaluated) >= budget:
+                raise Exhausted
+            evaluated.append(indices[id(row)])
+            scores[key] = d2h(i, row)
+        return scores[key]
+
+    region, before = data.rows, None
+    exhausted = False
+    try:
+        while len(region) > 4:
+            region, _, before, _ = half(data, region, True, before, score=score)
+        selected = region[0]
+        score(data, selected)  # The returned leaf row must also be labeled.
+    except Exhausted:
+        exhausted = True
+        selected = min((data.rows[ix] for ix in evaluated), key=lambda row: scores[tuple(row)])
+    return dict(selected_row=list(selected), evaluated_row_indices=evaluated,
+                oracle_evaluations=len(evaluated), labeling_cost=len(scores),
+                nominal_labeling_budget=budget, budget_exhausted=exhausted)
+
+
+def optimize(data, generate, budget=PRIMARY_BUDGET, seed=12345, policy='equal-oracle', scout=None):
     """Observed-row accounting; d2h search and Chebyshev primary reporting.
 
-    The current equal-oracle protocol retains every observed row for SMO.
-    The legacy policy preserves the historical top-two/bottom-two handoff.
+    All observed rows are retained for SMO. Seeds, scouting and mapped
+    candidates consume the same budget as the subsequent search.
     generate=None supplies the local exploit comparator under the same budget.
     """
     from src.utils.ezr import clone, d2h, chebyshev, dists, loglikes, the
-    if policy not in ("equal-oracle", "legacy-20-plus-warm"):
+    if policy != "equal-oracle":
         raise ValueError("Unknown budget policy")
-    if budget < 8 or len(data.rows) < budget + 6:
-        raise ValueError("Need budget >= 8 and at least budget+6 observed rows")
+    minimum = 4 + (10 if scout is not None else 0) + (4 if generate is not None else 0)
+    if type(budget) is not int or not max(8, minimum) <= budget <= PRIMARY_BUDGET:
+        raise ValueError(f'Budget must cover all {minimum} initial requests and not exceed {PRIMARY_BUDGET}')
+    if len(data.rows) < budget + 6:
+        raise ValueError('Need at least budget+6 observed rows')
     random.seed(seed)
     the.Last, the.label, the.GuessFaster = budget, 4, True
     rank = lambda indices: sorted(indices, key=lambda ix: d2h(data, data.rows[ix]))
@@ -65,8 +107,6 @@ def optimize(data, generate, budget, seed, policy, scout=None):
     scout_ledger = []
     scout_indices = []
     if scout is not None:
-        if policy != "equal-oracle":
-            raise ValueError("HKMA scouting requires equal-oracle budget")
         scout_indices, scout_ledger = scout(list(todo), seed)
         if len(scout_indices) != 10 or len(set(scout_indices)) != 10 or not set(scout_indices) <= set(todo):
             raise ValueError("Scouting must return ten distinct unevaluated rows")
@@ -80,20 +120,18 @@ def optimize(data, generate, budget, seed, policy, scout=None):
         rows = validate_rows(data, synth)
         neighbors = []
         for row in rows:
-            # Current-paper proposals map to the full observed table; repeated
+            # Generated proposals map to the full observed table; repeated
             # matches are still evaluation requests but are not new labels.
-            candidates = list(range(len(data.rows))) if policy == "equal-oracle" else todo
+            candidates = list(range(len(data.rows)))
             random.shuffle(candidates)
             nearest = min(candidates, key=lambda ix: dists(data, row, data.rows[ix]))
             neighbors.append(nearest)
             evaluated.append(nearest)
-            if policy != "equal-oracle":
-                todo.remove(nearest)
         todo = [ix for ix in todo if ix not in set(neighbors)]
         combined = rank(list(dict.fromkeys(done + neighbors)))
-        done = combined if policy == "equal-oracle" else [combined[0], combined[1], combined[-1], combined[-2]]
+        done = combined
     handoff = list(done)
-    iterations = budget - (len(evaluated) if policy == "equal-oracle" else 4)
+    iterations = budget - len(evaluated)
     for _ in range(iterations):
         cut = int(0.5 + len(done) ** the.N)
         best = clone(data, [data.rows[ix] for ix in done[:cut]])
@@ -108,6 +146,7 @@ def optimize(data, generate, budget, seed, policy, scout=None):
             "chebyshev": chebyshev(data, selected), "d2h": d2h(data, selected),
             "initial_row_indices": initial, "handoff_row_indices": handoff,
             "evaluated_row_indices": evaluated, "oracle_evaluations": len(evaluated),
+            "nominal_labeling_budget": budget,
             "smo_evaluations": iterations, "synth_rows": synth,
             "scout_evaluations": len(scout_indices), "scout_row_indices": scout_indices,
             "scout_ledger": scout_ledger}
@@ -140,7 +179,7 @@ class LoggedModel:
 
     def invoke(self, messages, response_format=None):
         if self.calls >= self.max_calls:
-            raise ValueError("Prospective model-call cap reached")
+            raise ValueError("Model-call limit reached")
         self.calls += 1
         settings = dict(model=MODEL, temperature=0.7, top_p=1.0, max_tokens=4000,
                         seed=self.seed, num_retries=0, timeout=180, caching=False)
@@ -207,7 +246,7 @@ def with_one_generation_repair(data, method, model, generate):
     """Allow one logged correction of an invalid final generation, never priors.
 
     The original response and failure reason remain on disk. The correction is
-    an extra model call under a prospective protocol, not a local coercion.
+    an additional counted model call.
     """
     from btp.methods.utils import parse_named_warm_starts
     if method not in REPAIRABLE_METHODS:

@@ -1,10 +1,10 @@
 ---
 source_id: moot_catalog_and_csv
 dataset_id: xomo_osp2
-source_path: third_party/moot/optimize/process/README.md
+upstream_path: optimize/process/README.md
 dataset_path: data/process/xomo_osp2.csv
 source_kind: repository_documentation_and_csv_header
-source_status: locally_available
+source_status: public_reference
 ---
 
 # xomo_osp2: task and column map

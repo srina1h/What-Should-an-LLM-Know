@@ -16,7 +16,8 @@ from statistics import mean, median
 from stats.scott_knott import rank_methods
 
 ROOT = Path(__file__).resolve().parent
-from study import METHODS, METRICS, OPTIONAL_METHODS, PROTOCOL_VERSION, QUESTIONS, SENSITIVITY_METHODS, normalize_preparation
+from datasets import load_datasets, dataset_fingerprint
+from study import METHODS, METRICS, OPTIONAL_METHODS, QUESTIONS, SENSITIVITY_METHODS, validate_budget, normalize_preparation
 COSTS = ('llm_calls', 'input_tokens', 'output_tokens', 'total_tokens',
          'api_cost_usd', 'wall_seconds')
 SK = dict(seed=20261016, bootstrap_samples=512, bootstrap_alpha=.05, cliffs_delta=.147)
@@ -52,7 +53,7 @@ def expected_groups(manifest, cohort, methods=METHODS):
                     raise AnalysisError(f'Duplicate expert track: {key}')
                 groups[key] = dataset
     if len({d['id'] for d in manifest[cohort]}) != len(manifest[cohort]):
-        raise AnalysisError(f'Duplicate dataset IDs in {cohort} manifest')
+        raise AnalysisError(f'Duplicate dataset IDs in {cohort} dataset list')
     if not groups:
         raise AnalysisError(f'Empty {cohort} cohort')
     return groups
@@ -96,8 +97,6 @@ def validate_trials(records, manifest, cohort, expected_repeats, methods=METHODS
             continue
         if record.get('method') in OPTIONAL_METHODS and record['method'] not in methods:
             continue
-        if record.get('protocol_version') != PROTOCOL_VERSION:
-            raise AnalysisError(f"Unsupported trial protocol at line {record.get('_line', '?')}; rerun with {PROTOCOL_VERSION}")
         key = (record.get('dataset'), record.get('method'), record.get('expert_id', ''))
         if key not in expected:
             raise AnalysisError(f'Unexpected {cohort} group {key}')
@@ -105,7 +104,7 @@ def validate_trials(records, manifest, cohort, expected_repeats, methods=METHODS
         if isinstance(rep, bool) or not isinstance(rep, int) or not 0 <= rep < expected_repeats:
             raise AnalysisError(f'{key}: rep must be in 0..{expected_repeats - 1}')
         if record.get('feature_count') != expected[key]['feature_count']:
-            raise AnalysisError(f'{key}: feature count disagrees with manifest')
+            raise AnalysisError(f'{key}: feature count disagrees with dataset schema')
         if record.get('status') not in ('success', 'failed'):
             raise AnalysisError(f'{key}: status must be success or failed')
         for field in COSTS:
@@ -119,6 +118,13 @@ def validate_trials(records, manifest, cohort, expected_repeats, methods=METHODS
             if record[field] is not None and int(record[field]) != record[field]:
                 raise AnalysisError(f'{key}: {field} must be an integer count')
         if record['status'] == 'success':
+            expected_hash = expected[key].get('sha256')
+            if expected_hash and record.get('dataset_sha256') != expected_hash:
+                raise AnalysisError(f'{key}: dataset content hash differs or is missing')
+            try:
+                validate_budget(record['method'], record)
+            except ValueError as error:
+                raise AnalysisError(str(error)) from error
             identity = (*key, rep)
             if identity in seen:
                 raise AnalysisError(f'Duplicate successful repeat: {identity}')
@@ -263,7 +269,7 @@ def format_value(value):
 
 
 def paper_layout(name, rows):
-    """Keep detailed CSV evidence; render the draft's compact table layouts."""
+    """Keep detailed CSV evidence; render compact table layouts."""
     def number(value, digits=4):
         return 'unavailable' if value is None else f'{value:.{digits}f}'
     if name == 'primary_low_label':
@@ -370,8 +376,7 @@ def run(rq, argv=None):
         if output.exists() and any(output.iterdir()):
             raise AnalysisError('Use a new or empty output directory to prevent stale tables')
         output.mkdir(parents=True, exist_ok=True)
-        manifest_path = ROOT / 'manifest.json'
-        manifest = json.loads(manifest_path.read_text())
+        manifest = load_datasets(ROOT)
         cohort = 'expert' if rq == 3 else getattr(args, 'cohort', 'automated')
         records = load_trials(args.trials)
         if cohort == 'expert':
@@ -379,9 +384,9 @@ def run(rq, argv=None):
         methods = SENSITIVITY_METHODS if rq == 4 and cohort == 'automated' else METHODS
         groups, coverage = validate_trials(records, manifest, cohort, args.expected_repeats, methods)
         write_table(output, 'coverage', coverage)
-        metadata = dict(rq=rq, question=QUESTIONS[rq], protocol_version=PROTOCOL_VERSION,
+        metadata = dict(rq=rq, question=QUESTIONS[rq],
                         methods=list(methods), metric='chebyshev', cohort=cohort, trials_sha256=sha256(args.trials),
-                        manifest_sha256=sha256(manifest_path),
+                        datasets_sha256=dataset_fingerprint(manifest),
                         analysis_sha256=sha256(Path(__file__)),
                         scott_knott_sha256=sha256(ROOT / 'stats/scott_knott.py'),
                         expected_repeats=args.expected_repeats, statistical_settings=SK,
@@ -426,7 +431,7 @@ def run(rq, argv=None):
                         feature_count=d['feature_count'], objective_count=d.get('objective_count'), tier=tier(d['feature_count']),
                         expert_tracks=len(d['knowledge_tracks'])) for d in datasets])
         else:
-            from experiments.remaining_methods.run import METHOD_CALLS
+            from experiments.evaluation.run import METHOD_CALLS
             write_table(output, 'amp_design', [dict(condition=m, analysis='Yes',
                         constraints='No' if m=='AMP-2' else 'Yes',
                         validation='Yes' if m=='AMP-4' else 'No', calls=METHOD_CALLS[m])

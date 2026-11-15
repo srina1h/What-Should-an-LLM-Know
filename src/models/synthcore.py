@@ -1,9 +1,9 @@
-"""Pinned SynthCore Diversity ensemble used by the current paper.
+"""Pinned SynthCore Diversity ensemble used by the study.
 
 Upstream commit eaec7012a1928c36e73ffcf7ec894c5e3e28bfe3 (clusters).
-The upstream ensemble, partitioning and prompt definitions below are executed
-unchanged. Provider transport, feature-column projection, numeric parsing and
-removal of the unconditional sleep match the study adapter. No downstream SMO.
+The study uses three sessions after 16 initial representatives. Each session
+can evaluate at most four generated candidates, for a cap of 28 requests.
+Oversized responses fail before candidate evaluation. No downstream SMO.
 """
 import ast
 import math
@@ -11,6 +11,7 @@ from pathlib import Path
 import random
 from types import SimpleNamespace
 from src.utils import ezr
+from study import SYNTHCORE_BUDGET
 
 SOURCE = Path(__file__).with_name('_synthcore_upstream')
 
@@ -71,10 +72,10 @@ def parse_markdown(data, text):
         (best if values[-1] == 'Best' else rest).append(full)
     return best + rest
 
-def run_ensemble(data, model, source, seed, leaf_override=None, sessions=15):
+def run_ensemble(data, model, source, seed, leaf_override=None, sessions=3):
     """Return scores of upstream selected row, selection audit, and ranked pool."""
-    if sessions not in (3, 15):
-        raise ValueError('Supported ensemble schedules are three or fifteen sessions')
+    if type(sessions) is not int or sessions != 3:
+        raise ValueError('SynthCore-28 requires exactly three sessions')
     random.seed(seed)
     namespace = dict(vars(ezr))
     # Upstream depth-based dendogram is not the local size-threshold variant.
@@ -85,6 +86,8 @@ def run_ensemble(data, model, source, seed, leaf_override=None, sessions=15):
     unique = set()
     def measured(name, fn):
         def wrapped(i, row):
+            if tuple(row) not in unique and len(unique) >= SYNTHCORE_BUDGET:
+                raise ValueError('SynthCore-28 exhausted its evaluation budget')
             counts[name + '_calls'] += 1
             unique.add(tuple(row))
             return fn(i, row)
@@ -93,8 +96,16 @@ def run_ensemble(data, model, source, seed, leaf_override=None, sessions=15):
     namespace['chebyshev'] = measured('chebyshev', ezr.chebyshev)
     namespace['DATA'] = lambda _: data
     namespace['csv'] = lambda _: None
-    if leaf_override:
-        namespace['leafs'] = leaf_override
+    leafs = leaf_override or namespace['leafs']
+    def representatives(*args, **kwargs):
+        points = leafs(*args, **kwargs)
+        # The pinned recursive leafs function also resolves this name.
+        # Only check once the top-level traversal has collected every leaf.
+        if len(args) < 2 or args[1] == 0:
+            if len(points) != 16:
+                raise ValueError('SynthCore-28 requires exactly 16 initial representatives')
+        return points
+    namespace['leafs'] = representatives
     audit = {'sessions': []}
     def warm(i, args, todo, done, method='LLM', iscombined=True):
         random.shuffle(i.rows)
@@ -111,6 +122,11 @@ def run_ensemble(data, model, source, seed, leaf_override=None, sessions=15):
         messages = [{'role':'user' if role == 'human' else role, 'content':content}
                     for role, content in prompt.get_template_markdown()]
         generated = parse_markdown(i, model.invoke(messages).content)
+        if len(generated) > 4:
+            raise ValueError('SynthCore-28 permits at most four candidates per session')
+        requests = counts['chebyshev_calls'] + sum(s['generated_count'] for s in audit['sessions'])
+        if requests + len(generated) > SYNTHCORE_BUDGET:
+            raise ValueError('SynthCore-28 exhausted its evaluation budget')
         new = []
         for record in generated:
             random.shuffle(todo)
