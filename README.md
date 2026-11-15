@@ -2,7 +2,7 @@
 
 Replication code for *What Should an LLM Know? Knowledge-Guided Warm Starts for Software Optimization*
 
-Includes 49 benchmark datasets and eight expert-study datasets. Three datasets are shared, giving **54 unique CSV files**. Every method uses the same included dataset version; paths and hashes are in `manifest.json`.
+Includes 49 benchmark datasets and eight expert-study datasets. Three datasets are shared, giving **54 unique CSV files**. Every method uses the same included dataset version.
 
 ## Research questions
 
