@@ -2,16 +2,14 @@
 
 Replication code for *What Should an LLM Know? Knowledge-Guided Warm Starts for Software Optimization*
 
-Includes 49 benchmark datasets and eight expert-study datasets. Three datasets are shared, giving **54 unique CSV files**. Every method uses the same included dataset version.
-
 ## Research questions
 
-| RQ | Question | Comparison |
-| --- | --- | --- |
-| RQ1 | With only 24 labels, can domain knowledge help an LLM propose better initial configurations? | Ten automated methods on 49 datasets; overall best-group counts and mean Chebyshev distance. |
-| RQ2 | Does increasing the number of configuration parameters change which kinds of knowledge help? | The same ten-method groups, summarized by dimensionality. |
-| RQ3 | Does human review of the LLM's domain rules help? | H-DKP plus the ten automated methods on eight expert-study datasets; independent pools for the two POM3a tracks. |
-| RQ4 | What does checked knowledge cost? | Online labels, inference costs and offline expert preparation; separate eleven-method SynthCore-28 sensitivity comparison on 49 datasets. |
+| RQ | Question |
+| --- | --- |
+| RQ1 | With only 24 labels, can domain knowledge help an LLM propose better initial configurations? | 
+| RQ2 | Does increasing the number of configuration parameters change which kinds of knowledge help? | 
+| RQ3 | Does human review of the LLM's domain rules help? | 
+| RQ4 | What does checked knowledge cost? |
 
 Dimensionality: low p < 6 (15 datasets), medium 6 <= p <= 11 (17), high p > 11 (17).
 
@@ -25,7 +23,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-For analysis of existing current-protocol trials, `requirements-analysis.txt` suffices. Planning verifies all dataset hashes without calling a model:
+For analysis of existing current-protocol trials, `requirements-analysis.txt` suffices.
 
 ```sh
 python rerun.py --cohort automated
